@@ -289,5 +289,55 @@ describe('Playwright-style Masking Engine (masker.ts)', () => {
       const maskedPayload = applyMaskingToExportPayload(payload);
       expect(maskedPayload.annotations[0].element.textContent).toBe('[MASKED]');
     });
+
+    it('masks descendant text matching maskSelectors while preserving non-sensitive parent text and handling truncated outerHTMLSnippet safely', () => {
+      const customConfig: MaskingConfig = {
+        ...DEFAULT_MASKING_CONFIG,
+        maskSelectors: ['[data-mask="true"]', '.customer-name'],
+      };
+
+      // 1. Parent with truncated outerHTMLSnippet (500 chars "...") and NO child matching maskSelectors
+      const truncatedParentNoMatch: ElementMetadata = {
+        ...baseElement,
+        id: 'long-article',
+        selector: '#long-article',
+        textContent:
+          'Public summary header with full text content that should not be overwritten by truncated outerHTMLSnippet.',
+        outerHTMLSnippet:
+          '<article id="long-article"><div class="prose">Public summary header...</div></article>',
+      };
+
+      const maskedNoMatch = applyMaskingToElementMetadata(
+        truncatedParentNoMatch,
+        false,
+        customConfig
+      );
+      expect(maskedNoMatch.textContent).toBe(
+        'Public summary header with full text content that should not be overwritten by truncated outerHTMLSnippet.'
+      );
+
+      // 2. Parent with child matching .customer-name and [data-mask="true"], plus truncated textContent at boundary
+      const parentWithMaskedChildren: ElementMetadata = {
+        ...baseElement,
+        id: 'pricing-card',
+        selector: '#pricing-card',
+        textContent:
+          'Enterprise Plan Owner: 山田 太郎 Secret: Project ApolloCodename...',
+        outerHTMLSnippet:
+          '<section id="pricing-card"><h2>Enterprise Plan</h2><span>Owner: <b class="customer-name">山田 太郎</b></span><div data-mask="true">Project ApolloCodename12345</div></section>',
+      };
+
+      const maskedParent = applyMaskingToElementMetadata(
+        parentWithMaskedChildren,
+        false,
+        customConfig
+      );
+      expect(maskedParent.textContent).toBe(
+        'Enterprise Plan Owner: [MASKED] Secret: [MASKED]...'
+      );
+      expect(maskedParent.textContent).not.toContain('山田 太郎');
+      expect(maskedParent.textContent).not.toContain('Project Apollo');
+    });
   });
 });
+

@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CloudMetrics Enterprise | DOM Prompt Annotator 動作確認デモページ</title>
+    <style>
+      :root {
+        --bg-page: #0f172a;
+        --bg-surface: #1e293b;
+        --bg-surface-elevated: #334155;
+        --border-subtle: #334155;
+        --text-primary: #f8fafc;
+        --text-secondary: #94a3b8;
+        --accent-blue: #3b82f6;
+        --accent-indigo: #6366f1;
+        --accent-emerald: #10b981;
+        --accent-fuchsia: #d946ef;
+        --accent-amber: #f59e0b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          'Hiragino Sans', 'Noto Sans JP', sans-serif;
+        background-color: var(--bg-page);
+        color: var(--text-primary);
+        line-height: 1.6;
+      }
+
+      .demo-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: rgba(15, 23, 42, 0.9);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--border-subtle);
+        padding: 14px 28px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-logo {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, var(--accent-blue), var(--accent-indigo));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 16px;
+        color: #fff;
+      }
+
+      .brand-title {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .brand-subtitle {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .pill-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .pill-react {
+        background: rgba(59, 130, 246, 0.15);
+        color: #60a5fa;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+      }
+
+      .pill-vue {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+      }
+
+      .pill-mask {
+        background: rgba(217, 70, 239, 0.15);
+        color: #f0abfc;
+        border: 1px solid rgba(217, 70, 239, 0.35);
+      }
+
+      .container {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .guide-banner {
+        background: linear-gradient(
+          135deg,
+          rgba(37, 99, 235, 0.16),
+          rgba(147, 51, 234, 0.16)
+        );
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        border-radius: 12px;
+        padding: 18px 22px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .guide-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 8px;
+        font-size: 13px;
+        color: #e2e8f0;
+      }
+
+      .guide-step {
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 8px;
+        padding: 6px 12px;
+      }
+
+      kbd {
+        background: #0f172a;
+        border: 1px solid #475569;
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        color: #93c5fd;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+        gap: 24px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        padding: 22px;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      }
+
+      .card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .card-desc {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .kpi-box {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 16px;
+      }
+
+      .kpi-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-weight: 600;
+      }
+
+      .kpi-value {
+        font-size: 26px;
+        font-weight: 800;
+        margin: 6px 0 4px;
+      }
+
+      .kpi-trend {
+        font-size: 12px;
+        color: #34d399;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.15s ease;
+      }
+
+      .btn-primary {
+        background: var(--accent-blue);
+        color: #ffffff;
+      }
+
+      .btn-primary:hover {
+        background: #2563eb;
+      }
+
+      .btn-secondary {
+        background: #334155;
+        color: #f8fafc;
+        border-color: #475569;
+      }
+
+      .btn-secondary:hover {
+        background: #475569;
+      }
+
+      .secret-mask-box {
+        background: rgba(217, 70, 239, 0.08);
+        border: 1px dashed rgba(217, 70, 239, 0.5);
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin: 12px 0;
+      }
+
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+
+      .form-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #cbd5e1;
+      }
+
+      .form-input {
+        background: #0f172a;
+        border: 1px solid #475569;
+        border-radius: 8px;
+        padding: 9px 12px;
+        color: #f8fafc;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      .pii-list {
+        list-style: none;
+        padding: 0;
+        margin: 12px 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 13px;
+      }
+
+      .pii-item {
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 8px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .code-inline {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        color: #93c5fd;
+        background: rgba(15, 23, 42, 0.8);
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Top Navigation Bar -->
+    <header class="demo-topbar" id="demo-header">
+      <div class="brand-row">
+        <div class="brand-logo">CM</div>
+        <div>
+          <div class="brand-title">CloudMetrics Enterprise</div>
+          <div class="brand-subtitle">
+            DOM Prompt Annotator テスト用インタラクティブ SaaS ダッシュボード
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <span class="pill-badge pill-react">⚛️ React Fiber 擬似アタッチ済</span>
+        <span class="pill-badge pill-vue">💚 Vue 3 インスタンス擬似アタッチ済</span>
+        <span class="pill-badge pill-mask">🛡️ PII &amp; Playwright Mask サンプル搭載</span>
+      </div>
+    </header>
+
+    <main class="container" id="dashboard-main">
+      <!-- Quick Testing Guide Banner -->
+      <section class="guide-banner" id="testing-guide-banner">
+        <div>
+          <strong style="font-size: 15px">
+            🚀 DOM Prompt Annotator 動作確認ガイド
+          </strong>
+          <div class="guide-steps">
+            <div class="guide-step">
+              1. サイドパネルを開くか <kbd>Alt+S</kbd> で<strong>選択モード</strong>をON
+            </div>
+            <div class="guide-step">
+              2. 下のカード内のボタンやテキストをクリックし <kbd>↑ 親要素</kbd> / <kbd>↓ 子要素</kbd> で階層調整
+            </div>
+            <div class="guide-step">
+              3. <code class="code-inline">[data-mask="true"]</code> や <code class="code-inline">.customer-name</code> のPlaywright風マスクを確認
+            </div>
+            <div class="guide-step">
+              4. <strong>クリップボードにコピー</strong>でLLM向けプロンプト＆JSONを出力
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- KPI Summary Section (React RevenueKpiGrid) -->
+      <section class="card" id="kpi-section">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title" id="kpi-section-title">
+              月次レベニュー＆利用状況サマリー
+            </h2>
+            <p class="card-desc">
+              React コンポーネント階層:
+              <code class="code-inline">App &gt; DashboardLayout &gt; RevenueKpiGrid</code>
+              (<code class="code-inline">src/components/RevenueKpiGrid.tsx:19</code>)
+            </p>
+          </div>
+          <span class="pill-badge pill-react">⚛️ RevenueKpiGrid</span>
+        </div>
+
+        <div class="grid-3" id="kpi-cards-grid">
+          <div class="kpi-box" id="kpi-mrr-card" data-testid="kpi-mrr">
+            <div class="kpi-label">月次経常収益 (MRR)</div>
+            <div class="kpi-value">¥14,820,000</div>
+            <div class="kpi-trend">+18.4% 前月比</div>
+          </div>
+
+          <div class="kpi-box" id="kpi-active-orgs" data-testid="kpi-orgs">
+            <div class="kpi-label">アクティブ契約テナント数</div>
+            <div class="kpi-value">1,248 社</div>
+            <div class="kpi-trend">+42 社 今月新規</div>
+          </div>
+
+          <div
+            class="kpi-box"
+            id="kpi-internal-forecast"
+            data-mask="true"
+            title="社外秘の売上予測データ"
+          >
+            <div class="kpi-label">【社外秘】来期ARR予測 (data-mask="true")</div>
+            <div class="kpi-value">¥215,000,000</div>
+            <div class="kpi-trend">※デフォルトでPlaywrightマスク対象</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2-Column Main Cards: Left = React HeroPricingCard, Right = Vue 3 CustomerSecurityCard -->
+      <div class="grid-2">
+        <!-- Left Column: React HeroPricingCard -->
+        <section class="card hero-pricing-card" id="pricing-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" id="plan-title">
+                Enterprise AI Plan (React Component)
+              </h2>
+              <p class="card-desc">
+                <code class="code-inline">src/components/HeroPricingCard.tsx:42</code>
+              </p>
+            </div>
+            <span class="pill-badge pill-react">⚛️ HeroPricingCard</span>
+          </div>
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 12px 14px;
+              background: rgba(15, 23, 42, 0.55);
+              border-radius: 8px;
+              margin-bottom: 14px;
+            "
+          >
+            <span style="font-size: 13px; color: var(--text-secondary)">
+              契約オーナー (<code class="code-inline">.customer-name</code>):
+            </span>
+            <span id="customer-badge" class="customer-name" style="font-weight: 700">
+              山田 太郎 (株式会社クラウドメトリクス)
+            </span>
+          </div>
+
+          <div
+            id="secret-project-box"
+            data-mask="true"
+            class="secret-mask-box"
+          >
+            <div style="font-size: 12px; color: #f0abfc; font-weight: 600">
+              🔒 data-mask="true" 指定エリア (Playwright Visual Mask)
+            </div>
+            <div style="font-size: 14px; font-weight: 700; margin-top: 2px">
+              機密プロジェクト名: Project Apollo 次世代LLM基盤統合
+            </div>
+          </div>
+
+          <ul class="pii-list" id="account-pii-summary">
+            <li class="pii-item">
+              <span>管理者メール (PII Email):</span>
+              <code class="code-inline" id="pii-email-text">user@example.com</code>
+            </li>
+            <li class="pii-item">
+              <span>緊急連絡先電話番号 (PII Phone):</span>
+              <code class="code-inline" id="pii-phone-text">090-1234-5678</code>
+            </li>
+            <li class="pii-item">
+              <span>Bearer トークン (PII JWT):</span>
+              <code
+                class="code-inline"
+                id="pii-token-text"
+                style="max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+              >
+                Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+              </code>
+            </li>
+          </ul>
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              margin-top: 20px;
+            "
+          >
+            <button
+              id="upgrade-cta-btn"
+              class="btn btn-primary"
+              type="button"
+              onclick="alert('通常操作モードでのボタンクリックが発火しました！')"
+            >
+              <span id="upgrade-cta-inner-text" class="btn-label">
+                プランをアップグレード
+              </span>
+            </button>
+
+            <button
+              id="download-invoice-btn"
+              class="btn btn-secondary"
+              type="button"
+            >
+              <span>請求書PDFをダウンロード</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Right Column: Vue 3 CustomerSecurityCard -->
+        <section class="card vue-security-card" id="vue-security-card" data-v-7ba5bd90="">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" id="vue-card-title">
+                API認証＆セキュリティ設定 (Vue 3 Component)
+              </h2>
+              <p class="card-desc">
+                <code class="code-inline">src/components/CustomerSecurityCard.vue</code>
+              </p>
+            </div>
+            <span class="pill-badge pill-vue">💚 CustomerSecurityCard</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="api-password-input">
+              本番環境 マスターAPIシークレット (<code class="code-inline">input[type="password"]</code>)
+            </label>
+            <input
+              id="api-password-input"
+              class="form-input"
+              type="password"
+              value="super-secret-pw-2026"
+              placeholder="本番シークレットキーを入力"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="openai-key-display">
+              連携済み OpenAI API Key (PII API Key 自動検出)
+            </label>
+            <div id="openai-key-display" class="form-input">
+              sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz123456
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="billing-card-display">
+              登録クレジットカード番号 (PII Credit Card 自動検出)
+            </label>
+            <div id="billing-card-display" class="form-input">
+              4111 1111 1111 1234 (名義: <span class="customer-name">山田 太郎</span>)
+            </div>
+          </div>
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: flex-end;
+              gap: 10px;
+              margin-top: 18px;
+            "
+          >
+            <button id="rotate-key-btn" class="btn btn-secondary" type="button">
+              <span id="rotate-key-label">APIキーをローテーション</span>
+            </button>
+            <button id="save-security-btn" class="btn btn-primary" type="button">
+              <span id="save-security-label">セキュリティ設定を保存</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Attach Simulated React Fiber & Vue 3 Component Metadata for Out-of-the-Box Inspection -->
+    <script>
+      (function attachSimulatedFrameworkMetadata() {
+        // 1. Simulated React 18 Fiber Tree
+        function App() {}
+        function DashboardLayout() {}
+        function RevenueKpiGrid() {}
+        RevenueKpiGrid.displayName = 'RevenueKpiGrid';
+        function HeroPricingCard() {}
+        HeroPricingCard.displayName = 'HeroPricingCard';
+
+        var appFiber = {
+          type: App,
+          return: null,
+        };
+
+        var layoutFiber = {
+          type: DashboardLayout,
+          return: appFiber,
+          _debugSource: {
+            fileName: 'src/layouts/DashboardLayout.tsx',
+            lineNumber: 12,
+            columnNumber: 4,
+          },
+        };
+
+        var kpiGridFiber = {
+          type: RevenueKpiGrid,
+          return: layoutFiber,
+          _debugSource: {
+            fileName: 'src/components/RevenueKpiGrid.tsx',
+            lineNumber: 19,
+            columnNumber: 4,
+          },
+        };
+
+        var heroPricingCardFiber = {
+          type: HeroPricingCard,
+          return: layoutFiber,
+          _debugSource: {
+            fileName: 'src/components/HeroPricingCard.tsx',
+            lineNumber: 42,
+            columnNumber: 8,
+          },
+        };
+
+        var kpiSection = document.getElementById('kpi-section');
+        if (kpiSection) {
+          kpiSection.__reactFiber$demo = kpiGridFiber;
+          kpiSection.querySelectorAll('*').forEach(function (child) {
+            child.__reactFiber$demo = {
+              type: child.tagName.toLowerCase(),
+              return: kpiGridFiber,
+              _debugSource: {
+                fileName: 'src/components/RevenueKpiGrid.tsx',
+                lineNumber: 28,
+                columnNumber: 6,
+              },
+            };
+          });
+        }
+
+        var pricingCard = document.getElementById('pricing-card');
+        if (pricingCard) {
+          pricingCard.__reactFiber$demo = heroPricingCardFiber;
+          pricingCard.querySelectorAll('*').forEach(function (child) {
+            child.__reactFiber$demo = {
+              type: child.tagName.toLowerCase(),
+              return: heroPricingCardFiber,
+              _debugSource: {
+                fileName: 'src/components/HeroPricingCard.tsx',
+                lineNumber: 42,
+                columnNumber: 8,
+              },
+            };
+          });
+        }
+
+        // 2. Simulated Vue 3 Component Hierarchy
+        var vueAppRootInstance = {
+          type: {
+            name: 'AppRoot',
+            __file: 'src/AppRoot.vue',
+          },
+          parent: null,
+        };
+
+        var vueSecurityPanelInstance = {
+          type: {
+            name: 'SecuritySettingsPanel',
+            __file: 'src/views/SecuritySettingsPanel.vue',
+          },
+          parent: vueAppRootInstance,
+        };
+
+        var vueCustomerSecurityCardInstance = {
+          type: {
+            name: 'CustomerSecurityCard',
+            __name: 'CustomerSecurityCard',
+            __file: 'src/components/CustomerSecurityCard.vue',
+          },
+          parent: vueSecurityPanelInstance,
+        };
+
+        var vueSecurityCard = document.getElementById('vue-security-card');
+        if (vueSecurityCard) {
+          vueSecurityCard.__vueParentComponent = vueCustomerSecurityCardInstance;
+          vueSecurityCard.querySelectorAll('*').forEach(function (child) {
+            child.__vueParentComponent = vueCustomerSecurityCardInstance;
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

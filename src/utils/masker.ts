@@ -394,7 +394,83 @@ export function applyMaskingToElementMetadata(
     }
   }
 
-  const maskedTextContent = maskTextString(element.textContent, {
+  let rawTextForMasking = element.textContent || '';
+  if (
+    !shouldMaskAll &&
+    rawTextForMasking &&
+    typeof document !== 'undefined' &&
+    Array.isArray(config.maskSelectors) &&
+    config.maskSelectors.length > 0
+  ) {
+    const maskedChildTexts = new Set<string>();
+
+    const collectMaskedDescendantTexts = (
+      rootNode: ParentNode,
+      isPossiblyTruncatedSnippet: boolean
+    ) => {
+      const matchedNodes = findMaskedElementsOnPage(
+        rootNode,
+        config.maskSelectors
+      );
+      for (const node of matchedNodes) {
+        let cleaned = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (isPossiblyTruncatedSnippet && cleaned.endsWith('...')) {
+          cleaned = cleaned.slice(0, -3).trim();
+        }
+        if (cleaned && cleaned !== '...') {
+          maskedChildTexts.add(cleaned);
+        }
+        if (node instanceof HTMLInputElement && node.value?.trim()) {
+          const val = node.value.trim();
+          if (val !== '...') {
+            maskedChildTexts.add(val);
+          }
+        }
+      }
+    };
+
+    if (element.outerHTMLSnippet) {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = element.outerHTMLSnippet;
+      collectMaskedDescendantTexts(
+        tpl.content,
+        element.outerHTMLSnippet.includes('...')
+      );
+    }
+
+    if (element.selector) {
+      try {
+        const liveRoot = document.querySelector(element.selector);
+        if (liveRoot) {
+          collectMaskedDescendantTexts(liveRoot, false);
+        }
+      } catch {
+        // Ignore invalid selector
+      }
+    }
+
+    // Replace longest matched child texts first to avoid partial replacements
+    const sortedTexts = Array.from(maskedChildTexts).sort(
+      (a, b) => b.length - a.length
+    );
+    for (const childText of sortedTexts) {
+      rawTextForMasking = rawTextForMasking.split(childText).join('[MASKED]');
+
+      // Also handle case where element.textContent was truncated at 300 chars ("...") mid-way through childText
+      if (rawTextForMasking.endsWith('...') && childText.length >= 4) {
+        const withoutEllipsis = rawTextForMasking.slice(0, -3);
+        for (let len = childText.length - 1; len >= 3; len--) {
+          const prefix = childText.slice(0, len);
+          if (withoutEllipsis.endsWith(prefix)) {
+            rawTextForMasking = `${withoutEllipsis.slice(0, -len)}[MASKED]...`;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const maskedTextContent = maskTextString(rawTextForMasking, {
     maskAll: shouldMaskAll,
     autoMaskPII: config.autoMaskPII,
   });
