@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dom-prompt-annotator Studio — Figma UI3 Style</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* FIGMA UI3 DESIGN SYSTEM TOKENS (Dark Mode) */
+    :root {
+      --figma-bg-canvas: #1e1e1e;
+      --figma-bg-panel: #2c2c2c;
+      --figma-bg-panel-secondary: #222222;
+      --figma-bg-input: #1e1e1e;
+      --figma-bg-hover: rgba(255, 255, 255, 0.07);
+      --figma-bg-active: rgba(255, 255, 255, 0.12);
+      
+      --figma-border: rgba(255, 255, 255, 0.08);
+      --figma-border-strong: rgba(255, 255, 255, 0.16);
+      
+      --figma-text-primary: #ffffff;
+      --figma-text-secondary: #b3b3b3;
+      --figma-text-tertiary: #757575;
+      
+      --figma-blue: #0d99ff;
+      --figma-blue-hover: #0082e6;
+      --figma-blue-active: #006bbd;
+      --figma-blue-bg: rgba(13, 153, 255, 0.15);
+
+      --figma-panel-radius: 14px;
+      --figma-island-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.45), 0 2px 8px -2px rgba(0, 0, 0, 0.35);
+      --figma-modal-shadow: 0 16px 48px -8px rgba(0, 0, 0, 0.65), 0 0 0 1px var(--figma-border);
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: var(--figma-bg-canvas);
+      color: var(--figma-text-primary);
+      user-select: none;
+      overflow: hidden;
+    }
+
+    /* Figma Canvas Dot Pattern */
+    .figma-canvas-grid {
+      background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    /* Floating Island Panels */
+    .figma-floating-panel {
+      background: var(--figma-bg-panel);
+      border: 1px solid var(--figma-border);
+      border-radius: var(--figma-panel-radius);
+      box-shadow: var(--figma-island-shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    /* Figma Property Inputs (W, H, X, Y) */
+    .figma-input-row {
+      display: flex;
+      align-items: center;
+      background: var(--figma-bg-input);
+      border: 1px solid var(--figma-border);
+      border-radius: 6px;
+      height: 28px;
+      padding: 0 6px;
+      font-size: 11px;
+      color: var(--figma-text-primary);
+      transition: border-color 0.15s;
+    }
+    .figma-input-row:focus-within {
+      border-color: var(--figma-blue);
+    }
+    .figma-input-label {
+      color: var(--figma-text-tertiary);
+      font-size: 10px;
+      font-weight: 500;
+      width: 14px;
+      user-select: none;
+    }
+    .figma-input-field {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--figma-text-primary);
+      font-size: 11px;
+      width: 100%;
+    }
+
+    /* Figma Artboard Selection Frame */
+    .figma-artboard-frame {
+      box-shadow: 0 0 0 1.5px var(--figma-blue), 0 20px 50px -10px rgba(0, 0, 0, 0.6);
+      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), height 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .figma-corner-handle {
+      position: absolute;
+      width: 7px;
+      height: 7px;
+      background: #ffffff;
+      border: 1.5px solid var(--figma-blue);
+      border-radius: 1px;
+    }
+
+    /* Custom Tiny Scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+  </style>
+</head>
+<body class="h-screen w-screen flex flex-col relative select-none">
+
+  <!-- ========================================================================= -->
+  <!-- 1. FIGMA UI3 TOP FLOATING APP BAR (Left: Project, Right: Dev Mode & Export) -->
+  <!-- ========================================================================= -->
+  <header class="absolute top-3 left-3 right-3 h-11 flex items-center justify-between z-40 pointer-events-none">
+    
+    <!-- Top-Left Island: Logo & Breadcrumbs -->
+    <div class="figma-floating-panel h-11 px-3 flex items-center gap-2.5 pointer-events-auto">
+      <!-- Figma Logo Icon -->
+      <div class="flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition">
+        <svg class="w-4 h-4" viewBox="0 0 38 57" fill="none">
+          <path d="M19 28.5C19 23.2533 23.2533 19 28.5 19C33.7467 19 38 23.2533 38 28.5C38 33.7467 33.7467 38 28.5 38C23.2533 38 19 33.7467 19 28.5Z" fill="#1ABCFE"/>
+          <path d="M0 47.5C0 42.2533 4.25329 38 9.5 38H19V47.5C19 52.7467 14.7467 57 9.5 57C4.25329 57 0 52.7467 0 47.5Z" fill="#0ACF83"/>
+          <path d="M19 0V19H28.5C33.7467 19 38 14.7467 38 9.5C38 4.25329 33.7467 0 28.5 0H19Z" fill="#FF7262"/>
+          <path d="M0 9.5C0 14.7467 4.25329 19 9.5 19H19V0H9.5C4.25329 0 0 4.25329 0 9.5Z" fill="#F24E1E"/>
+          <path d="M0 28.5C0 33.7467 4.25329 38 9.5 38H19V19H9.5C4.25329 19 0 23.2533 0 28.5Z" fill="#A259FF"/>
+        </svg>
+        <span class="text-xs font-semibold text-white tracking-tight">DOM Annotator</span>
+      </div>
+
+      <div class="h-3.5 w-px bg-[var(--figma-border)]"></div>
+
+      <!-- File Name / Status -->
+      <div class="flex items-center gap-1.5 text-xs text-[var(--figma-text-secondary)]">
+        <span class="text-white font-medium hover:bg-[var(--figma-bg-hover)] px-1.5 py-0.5 rounded cursor-pointer transition">
+          CloudMetrics E2E Session
+        </span>
+        <span class="text-[10px] text-[var(--figma-text-tertiary)]">/</span>
+        <span class="text-[11px] text-[var(--figma-text-tertiary)]">Recorded 14.2s</span>
+      </div>
+    </div>
+
+    <!-- Top-Right Island: Dev Mode, Share, Copy Prompt -->
+    <div class="figma-floating-panel h-11 px-2.5 flex items-center gap-2 pointer-events-auto">
+      
+      <!-- Dev Mode Switch (Figma Toggle) -->
+      <div class="flex items-center bg-[var(--figma-bg-input)] p-0.5 rounded-lg border border-[var(--figma-border)]">
+        <button class="px-2 py-1 text-[11px] font-medium rounded-md bg-[var(--figma-bg-panel)] text-white shadow-sm flex items-center gap-1">
+          <svg class="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
+          <span>Dev Mode</span>
+        </button>
+      </div>
+
+      <div class="h-3.5 w-px bg-[var(--figma-border)]"></div>
+
+      <!-- Copy AI Prompt (Figma Blue Action Button) -->
+      <button onclick="copyPrompt()" class="h-7 px-3 bg-[var(--figma-blue)] hover:bg-[var(--figma-blue-hover)] active:bg-[var(--figma-blue-active)] text-white text-[11px] font-medium rounded-lg flex items-center gap-1.5 shadow-sm transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/></svg>
+        <span>AIプロンプトを生成</span>
+      </button>
+    </div>
+
+  </header>
+
+
+  <!-- ========================================================================= -->
+  <!-- 2. INFINITE CANVAS (Background Workspace with Artboard) -->
+  <!-- ========================================================================= -->
+  <main class="flex-1 w-full h-full figma-canvas-grid relative overflow-hidden flex items-center justify-center p-12">
+    
+    <!-- CANVAS ARTBOARD CONTAINER (The Device Under Inspection) -->
+    <div class="relative" style="margin-top: -20px;">
+      
+      <!-- Artboard Label (Figma-style floating title) -->
+      <div class="absolute -top-6 left-0 flex items-center gap-2 select-none pointer-events-none">
+        <span class="text-[11px] font-medium text-[var(--figma-text-secondary)]">iPhone 15 Pro</span>
+        <span class="text-[10px] text-[var(--figma-text-tertiary)] font-mono">393 × 852</span>
+        <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-mono">100% Zoom</span>
+      </div>
+
+      <!-- Artboard Frame Box with Figma Blue Outline -->
+      <div id="artboard-box" class="figma-artboard-frame bg-white rounded-[24px] overflow-hidden relative flex flex-col" style="width: 393px; height: 680px;">
+        
+        <!-- Four Corner Figma Handles -->
+        <div class="figma-corner-handle -top-1 -left-1"></div>
+        <div class="figma-corner-handle -top-1 -right-1"></div>
+        <div class="figma-corner-handle -bottom-1 -left-1"></div>
+        <div class="figma-corner-handle -bottom-1 -right-1"></div>
+
+        <!-- Phone Notch / Island -->
+        <div class="h-6 bg-slate-900 flex items-center justify-between px-6 text-slate-400 text-[10px] font-mono select-none shrink-0">
+          <span>9:41</span>
+          <div class="w-16 h-3.5 bg-black rounded-full"></div>
+          <div class="flex items-center gap-1">
+            <span>5G</span>
+            <div class="w-3.5 h-2 border border-slate-400 rounded-sm p-0.5"><div class="h-full bg-slate-300 w-2/3"></div></div>
+          </div>
+        </div>
+
+        <!-- REPLAYED WEB APP CONTENT (Under test) -->
+        <div class="flex-1 bg-slate-50 overflow-y-auto p-4 space-y-4 text-slate-900 relative">
+          
+          <!-- Web App Navigation -->
+          <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+            <div class="font-bold text-sm text-slate-900 tracking-tight">CloudMetrics</div>
+            <div class="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-semibold">JD</div>
+          </div>
+
+          <!-- Card 1 -->
+          <div class="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm space-y-2">
+            <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">MRR (月次経常収益)</span>
+            <div class="text-xl font-bold text-slate-900">$32,450</div>
+            <div class="text-[11px] text-emerald-600 font-medium">↑ 18.4% 先月比</div>
+          </div>
+
+          <!-- Inspectable Target: CTA Button -->
+          <div class="relative group">
+            <button id="target-upgrade-btn" onclick="openPopover(this, 'button#upgrade-cta', 'HeroPricingCard', 'CTAボタンをグラデーションに変更し、ホバー演出を追加')" class="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-xs shadow-sm transition flex items-center justify-center">
+              プロプランにアップグレード
+            </button>
+            <!-- Figma Selection Overlay Tag -->
+            <div class="absolute -top-2.5 -right-2 px-1.5 py-0.5 rounded bg-[var(--figma-blue)] text-white text-[9px] font-semibold font-mono pointer-events-none shadow-sm">
+              #1
+            </div>
+          </div>
+
+          <!-- Inspectable Target: Transient Toast (Visible between 3.0s and 6.0s) -->
+          <div id="dynamic-toast" class="transition-all duration-200 transform opacity-100 translate-y-0 cursor-pointer relative" onclick="openPopover(this, 'div.toast-notification', 'ToastProvider', 'トーストの表示時間を5秒に延長し、閉じるボタンを明示的に配置する')">
+            <div class="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-800 flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-500 text-slate-900 flex items-center justify-center text-[10px] font-bold mt-0.5">✓</div>
+              <div class="flex-1">
+                <div class="font-semibold text-xs text-white">設定を保存しました</div>
+                <div class="text-[10px] text-slate-400">プランが正常に更新されました（一瞬で消えるUI）</div>
+              </div>
+            </div>
+            <!-- Figma Selection Tag -->
+            <div class="absolute -top-2.5 -right-2 px-1.5 py-0.5 rounded bg-[var(--figma-blue)] text-white text-[9px] font-semibold font-mono pointer-events-none shadow-sm ring-2 ring-white">
+              #2
+            </div>
+          </div>
+
+          <!-- Background fillers -->
+          <div class="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+            <div class="h-3 bg-slate-100 rounded w-1/3"></div>
+            <div class="h-6 bg-slate-50 rounded"></div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- IN-CANVAS FIGMA POPOVER (Inspect Card anchored to target) -->
+      <div id="figma-popover" class="hidden absolute z-50 bg-[#2c2c2c] border border-white/10 rounded-xl shadow-2xl p-3 w-[290px] text-white" style="top: 240px; left: 50px;">
+        <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/10">
+          <div class="flex items-center gap-1.5 font-mono text-[10px]">
+            <span class="px-1.5 py-0.5 rounded bg-[var(--figma-blue-bg)] text-[var(--figma-blue)] font-medium" id="popover-tag">div.toast-notification</span>
+          </div>
+          <button onclick="closePopover()" class="text-zinc-400 hover:text-white p-0.5 rounded">✕</button>
+        </div>
+
+        <div class="text-[10px] text-zinc-400 mb-2 flex items-center justify-between">
+          <span id="popover-comp">Component: ToastProvider</span>
+          <div class="flex gap-1">
+            <button class="px-1 py-0.5 bg-white/5 hover:bg-white/10 rounded">↑ Parent</button>
+            <button class="px-1 py-0.5 bg-white/5 hover:bg-white/10 rounded">↓ Child</button>
+          </div>
+        </div>
+
+        <div class="space-y-1 mb-2.5">
+          <label class="text-[10px] font-medium text-zinc-300">AIへの修正指示:</label>
+          <textarea id="popover-instruction" rows="2" class="w-full bg-[#1e1e1e] border border-white/10 rounded-md p-1.5 text-xs text-white focus:outline-none focus:border-[var(--figma-blue)] resize-none"></textarea>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <label class="flex items-center gap-1 text-[10px] text-zinc-400 cursor-pointer">
+            <input type="checkbox" class="rounded bg-zinc-800 border-zinc-700">
+            <span>PII伏字化</span>
+          </label>
+          <button onclick="closePopover()" class="px-2.5 py-1 bg-[var(--figma-blue)] hover:bg-[var(--figma-blue-hover)] text-white text-[10px] font-medium rounded-md shadow-sm">
+            保存 (Enter)
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+
+  <!-- ========================================================================= -->
+  <!-- 3. FIGMA UI3 LEFT FLOATING PANEL (Layers & Annotation History) -->
+  <!-- ========================================================================= -->
+  <aside class="figma-floating-panel absolute top-16 left-3 bottom-20 w-64 flex flex-col z-30 pointer-events-auto">
+    
+    <!-- Panel Header: Tabs (Annotations / Steps) -->
+    <div class="h-9 px-3 border-b border-[var(--figma-border)] flex items-center justify-between shrink-0">
+      <span class="text-[11px] font-semibold text-white tracking-tight">Annotations</span>
+      <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-zinc-300">2 items</span>
+    </div>
+
+    <!-- Tree / Card List -->
+    <div class="flex-1 overflow-y-auto p-2 space-y-1">
+      
+      <!-- Tree Item #1 -->
+      <div onclick="seekTo(1.2)" class="p-2 rounded-lg hover:bg-[var(--figma-bg-hover)] cursor-pointer transition border border-transparent hover:border-[var(--figma-border)] space-y-1">
+        <div class="flex items-center justify-between text-[11px]">
+          <div class="flex items-center gap-1.5">
+            <span class="w-3.5 h-3.5 rounded bg-[var(--figma-blue)] text-white text-[9px] font-bold flex items-center justify-center">1</span>
+            <span class="font-medium text-white truncate max-w-[140px]">button#upgrade-cta</span>
+          </div>
+          <span class="text-[10px] text-[var(--figma-text-tertiary)] font-mono">00:01.2</span>
+        </div>
+        <div class="text-[10px] text-[var(--figma-text-secondary)] pl-5 truncate">
+          CTAボタンをグラデーションに変更
+        </div>
+      </div>
+
+      <!-- Tree Item #2 (Active) -->
+      <div onclick="seekTo(3.2)" class="p-2 rounded-lg bg-[var(--figma-blue-bg)] border border-[var(--figma-blue)]/40 cursor-pointer transition space-y-1">
+        <div class="flex items-center justify-between text-[11px]">
+          <div class="flex items-center gap-1.5">
+            <span class="w-3.5 h-3.5 rounded bg-[var(--figma-blue)] text-white text-[9px] font-bold flex items-center justify-center">2</span>
+            <span class="font-medium text-white truncate max-w-[140px]">div.toast-notification</span>
+          </div>
+          <span class="text-[10px] text-amber-400 font-mono">00:03.2</span>
+        </div>
+        <div class="text-[10px] text-zinc-200 pl-5">
+          トーストの表示時間を5秒に延長し、閉じるボタンを配置
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Panel Footer: Global Context -->
+    <div class="p-2.5 border-t border-[var(--figma-border)] bg-[var(--figma-bg-panel-secondary)]/50 rounded-b-[var(--figma-panel-radius)]">
+      <div class="text-[10px] font-medium text-[var(--figma-text-tertiary)] mb-1">PROMPT CONTEXT</div>
+      <input type="text" class="w-full h-6 bg-[var(--figma-bg-input)] border border-[var(--figma-border)] rounded px-2 text-[10px] text-white focus:outline-none focus:border-[var(--figma-blue)]" value="Tailwind CSS / React 18">
+    </div>
+
+  </aside>
+
+
+  <!-- ========================================================================= -->
+  <!-- 4. FIGMA UI3 RIGHT FLOATING PANEL (Properties & Inspector Rows) -->
+  <!-- ========================================================================= -->
+  <aside class="figma-floating-panel absolute top-16 right-3 bottom-20 w-64 flex flex-col z-30 pointer-events-auto">
+    
+    <!-- Panel Header: Design / Code Toggle -->
+    <div class="h-9 px-2 border-b border-[var(--figma-border)] flex items-center shrink-0">
+      <div class="w-full grid grid-cols-2 bg-[var(--figma-bg-input)] p-0.5 rounded-md border border-[var(--figma-border)] text-[10px] font-medium">
+        <button class="py-0.5 rounded bg-[var(--figma-bg-panel)] text-white shadow-sm">Inspect</button>
+        <button class="py-0.5 text-[var(--figma-text-tertiary)] hover:text-white">Export</button>
+      </div>
+    </div>
+
+    <!-- Inspector Property Rows (Real Figma Look!) -->
+    <div class="flex-1 overflow-y-auto p-3 space-y-3.5 text-xs">
+      
+      <!-- Frame Dimensions (W, H) -->
+      <div>
+        <div class="text-[10px] font-semibold text-[var(--figma-text-tertiary)] uppercase tracking-wider mb-1.5">Frame Dimensions</div>
+        <div class="grid grid-cols-2 gap-1.5">
+          <div class="figma-input-row">
+            <span class="figma-input-label">W</span>
+            <input type="text" class="figma-input-field" value="393" id="input-width" onchange="applyCustomSize()">
+          </div>
+          <div class="figma-input-row">
+            <span class="figma-input-label">H</span>
+            <input type="text" class="figma-input-field" value="852" id="input-height" onchange="applyCustomSize()">
+          </div>
+        </div>
+      </div>
+
+      <div class="h-px bg-[var(--figma-border)]"></div>
+
+      <!-- Selected Element Specs -->
+      <div>
+        <div class="text-[10px] font-semibold text-[var(--figma-text-tertiary)] uppercase tracking-wider mb-1.5">Selected Element (#2)</div>
+        <div class="space-y-1.5">
+          <div class="figma-input-row">
+            <span class="text-[10px] text-[var(--figma-text-tertiary)] mr-1">Tag</span>
+            <span class="text-[10px] font-mono text-indigo-300">div.toast-notification</span>
+          </div>
+          <div class="figma-input-row">
+            <span class="text-[10px] text-[var(--figma-text-tertiary)] mr-1">React</span>
+            <span class="text-[10px] font-mono text-emerald-400">ToastProvider.tsx:42</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="h-px bg-[var(--figma-border)]"></div>
+
+      <!-- Styles (Figma Color Pill & Typography) -->
+      <div>
+        <div class="text-[10px] font-semibold text-[var(--figma-text-tertiary)] uppercase tracking-wider mb-1.5">Computed Fill</div>
+        <div class="figma-input-row justify-between">
+          <div class="flex items-center gap-1.5">
+            <div class="w-3.5 h-3.5 rounded bg-slate-900 border border-white/20"></div>
+            <span class="font-mono text-[10px]">#0F172A</span>
+          </div>
+          <span class="text-[10px] text-[var(--figma-text-tertiary)] font-mono">100%</span>
+        </div>
+      </div>
+
+      <div class="h-px bg-[var(--figma-border)]"></div>
+
+      <!-- Prompt Preview Box -->
+      <div>
+        <div class="text-[10px] font-semibold text-[var(--figma-text-tertiary)] uppercase tracking-wider mb-1.5">Markdown Output</div>
+        <div class="bg-[var(--figma-bg-input)] p-2 rounded-lg border border-[var(--figma-border)] text-[10px] font-mono text-[var(--figma-text-secondary)] leading-relaxed select-text">
+### 🎯 指示 #2 (Toast)
+- Target: `div.toast-notification`
+- React: ToastProvider
+- Action: 表示時間を5秒に延長
+        </div>
+      </div>
+
+    </div>
+
+  </aside>
+
+
+  <!-- ========================================================================= -->
+  <!-- 5. FIGMA UI3 FLOATING BOTTOM TOOLBAR (Center Floating Pill with Scrubber) -->
+  <!-- ========================================================================= -->
+  <footer class="absolute bottom-4 left-1/2 -translate-x-1/2 h-12 figma-floating-panel px-3 flex items-center gap-3 z-40 pointer-events-auto shadow-2xl">
+    
+    <!-- Tool 1: Move / Inspect Toggle (Figma Cursor) -->
+    <button class="w-8 h-8 rounded-lg bg-[var(--figma-blue)] text-white flex items-center justify-center transition shadow-sm" title="Inspect Mode (Alt+S)">
+      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M4 2v18l5-5h7l-12-13z"/></svg>
+    </button>
+
+    <!-- Tool 2: Device Selector Dropdown -->
+    <div class="flex items-center gap-1 bg-[var(--figma-bg-input)] px-2 py-1 rounded-lg border border-[var(--figma-border)]">
+      <svg class="w-3.5 h-3.5 text-[var(--figma-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>
+      <select onchange="switchDevicePreset(this.value)" class="bg-transparent text-[11px] font-medium text-white outline-none cursor-pointer">
+        <option value="iphone">iPhone 15 Pro (393)</option>
+        <option value="ipad">iPad Mini (768)</option>
+        <option value="desktop">MacBook Pro (1024)</option>
+      </select>
+    </div>
+
+    <div class="h-4 w-px bg-[var(--figma-border)]"></div>
+
+    <!-- Tool 3: Play / Pause Button -->
+    <div class="flex items-center gap-1">
+      <button onclick="stepTime(-1)" class="w-6 h-6 rounded hover:bg-[var(--figma-bg-hover)] text-zinc-400 hover:text-white flex items-center justify-center">
+        ◀
+      </button>
+      <button id="btn-play-pause" onclick="togglePlay()" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition">
+        <span id="play-symbol" class="text-xs">▶</span>
+      </button>
+      <button onclick="stepTime(1)" class="w-6 h-6 rounded hover:bg-[var(--figma-bg-hover)] text-zinc-400 hover:text-white flex items-center justify-center">
+        ▶
+      </button>
+    </div>
+
+    <!-- Timeline Scrubber Bar -->
+    <div class="flex items-center gap-2 w-64">
+      <span id="time-display" class="font-mono text-[10px] text-white w-14">00:03.200</span>
+      
+      <!-- Track -->
+      <div class="flex-1 h-1.5 bg-zinc-700/60 rounded-full relative cursor-pointer" onclick="seekByClick(event)">
+        <div id="timeline-bar" class="h-full bg-[var(--figma-blue)] rounded-full relative" style="width: 22.5%;">
+          <div class="absolute -right-1.5 -top-1 w-3.5 h-3.5 rounded-full bg-white shadow border border-[var(--figma-blue)]"></div>
+        </div>
+
+        <!-- Marker: 1.2s -->
+        <div onclick="seekTo(1.2)" class="absolute top-1/2 -translate-y-1/2 -ml-1 w-2 h-2 rounded-full bg-indigo-400 hover:scale-150 transition" style="left: 8.4%;" title="00:01.2: Click CTA"></div>
+        <!-- Marker: 3.2s (Current) -->
+        <div onclick="seekTo(3.2)" class="absolute top-1/2 -translate-y-1/2 -ml-1 w-2 h-2 rounded-full bg-amber-400 hover:scale-150 transition ring-2 ring-amber-400/50" style="left: 22.5%;" title="00:03.2: Toast Appeared"></div>
+      </div>
+    </div>
+
+    <div class="h-4 w-px bg-[var(--figma-border)]"></div>
+
+    <!-- Tool 4: Record Indicator -->
+    <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-400 text-[10px] font-semibold">
+      <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+      <span>14.2s</span>
+    </div>
+
+  </footer>
+
+  <!-- Toast Copy Alert -->
+  <div id="toast-alert" class="fixed top-16 left-1/2 -translate-x-1/2 bg-[var(--figma-bg-panel)] border border-emerald-500/40 text-white px-4 py-2 rounded-xl text-xs font-medium shadow-2xl transition-all duration-200 opacity-0 -translate-y-2 pointer-events-none flex items-center gap-2 z-50">
+    <span class="text-emerald-400">✓</span>
+    <span id="toast-text">プロンプトをクリップボードにコピーしました</span>
+  </div>
+
+  <script>
+    let currentTime = 3.2;
+    const totalDuration = 14.2;
+    let isPlaying = false;
+    let timer = null;
+
+    function updateTimeUI() {
+      const display = document.getElementById('time-display');
+      const bar = document.getElementById('timeline-bar');
+      const toast = document.getElementById('dynamic-toast');
+
+      const mins = Math.floor(currentTime / 60).toString().padStart(2, '0');
+      const secs = (currentTime % 60).toFixed(3).padStart(6, '0');
+      display.textContent = `${mins}:${secs}`;
+
+      const pct = (currentTime / totalDuration) * 100;
+      bar.style.width = `${pct}%`;
+
+      // Toast appears only between 3.0s and 6.0s!
+      if (currentTime >= 3.0 && currentTime <= 6.0) {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+        toast.style.pointerEvents = 'auto';
+      } else {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-6px)';
+        toast.style.pointerEvents = 'none';
+        closePopover();
+      }
+    }
+
+    function seekTo(sec) {
+      currentTime = Math.max(0, Math.min(sec, totalDuration));
+      updateTimeUI();
+    }
+
+    function stepTime(delta) {
+      seekTo(currentTime + delta);
+    }
+
+    function seekByClick(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      seekTo((clickX / rect.width) * totalDuration);
+    }
+
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      const symbol = document.getElementById('play-symbol');
+      if (isPlaying) {
+        symbol.textContent = '❚❚';
+        timer = setInterval(() => {
+          if (currentTime >= totalDuration) {
+            togglePlay();
+            return;
+          }
+          currentTime += 0.05;
+          updateTimeUI();
+        }, 50);
+      } else {
+        symbol.textContent = '▶';
+        clearInterval(timer);
+      }
+    }
+
+    function switchDevicePreset(preset) {
+      const box = document.getElementById('artboard-box');
+      const wInput = document.getElementById('input-width');
+      const hInput = document.getElementById('input-height');
+
+      if (preset === 'iphone') {
+        box.style.width = '393px';
+        box.style.height = '680px';
+        wInput.value = '393';
+        hInput.value = '852';
+      } else if (preset === 'ipad') {
+        box.style.width = '768px';
+        box.style.height = '680px';
+        wInput.value = '768';
+        hInput.value = '1024';
+      } else if (preset === 'desktop') {
+        box.style.width = '960px';
+        box.style.height = '680px';
+        wInput.value = '1024';
+        hInput.value = '768';
+      }
+    }
+
+    function applyCustomSize() {
+      const box = document.getElementById('artboard-box');
+      const w = document.getElementById('input-width').value;
+      box.style.width = `${Math.min(parseInt(w) || 393, 1100)}px`;
+    }
+
+    function openPopover(elem, tag, comp, text) {
+      const popover = document.getElementById('figma-popover');
+      document.getElementById('popover-tag').textContent = tag;
+      document.getElementById('popover-comp').textContent = `Component: ${comp}`;
+      document.getElementById('popover-instruction').value = text;
+      popover.classList.remove('hidden');
+    }
+
+    function closePopover() {
+      document.getElementById('figma-popover').classList.add('hidden');
+    }
+
+    function copyPrompt() {
+      showToast('AIプロンプトをクリップボードにコピーしました！');
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast-alert');
+      document.getElementById('toast-text').textContent = msg;
+      t.classList.remove('opacity-0', '-translate-y-2');
+      setTimeout(() => {
+        t.classList.add('opacity-0', '-translate-y-2');
+      }, 2500);
+    }
+
+    // Init
+    updateTimeUI();
+  </script>
+</body>
+</html>
