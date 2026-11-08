@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FloatingBottomBar } from '../FloatingBottomBar';
+import { FloatingBottomBar, isInsideRef } from '../FloatingBottomBar';
 import {
   DEFAULT_DEVICE_EMULATION_CONFIG,
   DeviceEmulationConfig,
@@ -46,7 +46,9 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       ...props,
     };
 
-    root = createRoot(container);
+    if (!root) {
+      root = createRoot(container);
+    }
     await act(async () => {
       root!.render(<FloatingBottomBar {...defaultProps} />);
     });
@@ -241,5 +243,221 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       recBtn.click();
     });
     expect(onToggleRecording).toHaveBeenCalledTimes(1);
+  });
+
+  describe('Shadow DOM event retargeting and outside click handling', () => {
+    it('isInsideRef returns true when ref is in composedPath even if target is retargeted', () => {
+      const el = document.createElement('div');
+      const ref = { current: el };
+      const dummyTarget = document.createElement('div');
+
+      const event = new MouseEvent('mousedown');
+      Object.defineProperty(event, 'composedPath', {
+        value: () => [document.createElement('span'), el, document.body],
+      });
+      Object.defineProperty(event, 'target', {
+        value: dummyTarget,
+      });
+
+      expect(isInsideRef(ref, event)).toBe(true);
+    });
+
+    it('isInsideRef returns false when ref is not in composedPath', () => {
+      const el = document.createElement('div');
+      const ref = { current: el };
+
+      const event = new MouseEvent('mousedown');
+      Object.defineProperty(event, 'composedPath', {
+        value: () => [document.createElement('span'), document.body],
+      });
+
+      expect(isInsideRef(ref, event)).toBe(false);
+    });
+
+    it('isInsideRef falls back to ref.current.contains when composedPath is undefined', () => {
+      const parent = document.createElement('div');
+      const child = document.createElement('span');
+      parent.appendChild(child);
+      const ref = { current: parent };
+
+      const event = {
+        target: child,
+      } as unknown as MouseEvent;
+
+      expect(isInsideRef(ref, event)).toBe(true);
+
+      const outside = document.createElement('div');
+      const outsideEvent = {
+        target: outside,
+      } as unknown as MouseEvent;
+      expect(isInsideRef(ref, outsideEvent)).toBe(false);
+    });
+
+    it('keeps device menu open during mousedown within Shadow DOM and allows preset selection', async () => {
+      const onSetDeviceEmulation = vi.fn();
+      await renderComponent({ onSetDeviceEmulation });
+
+      // Open device menu
+      const deviceBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-device-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        deviceBtn.click();
+      });
+
+      expect(container.querySelector('[data-testid="dpa-device-menu"]')).not.toBeNull();
+
+      const presetItem = container.querySelector(
+        '[data-testid="dpa-device-preset-iphone-15-pro"]'
+      ) as HTMLButtonElement;
+      expect(presetItem).not.toBeNull();
+
+      // Simulate mousedown with retargeted target (shadow host) but composedPath containing the menu item
+      const selectorWrap = container.querySelector('.dpa-device-selector-wrap') as HTMLElement;
+      const mousedownEvent = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(mousedownEvent, 'target', {
+        value: document.body, // Retargeted to outer element
+      });
+      Object.defineProperty(mousedownEvent, 'composedPath', {
+        value: () => [presetItem, selectorWrap, container, document.body],
+      });
+
+      await act(async () => {
+        window.dispatchEvent(mousedownEvent);
+      });
+
+      // Menu must remain open
+      expect(container.querySelector('[data-testid="dpa-device-menu"]')).not.toBeNull();
+
+      // Click preset item
+      await act(async () => {
+        presetItem.click();
+      });
+
+      expect(onSetDeviceEmulation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          presetId: 'iphone-15-pro',
+        })
+      );
+    });
+
+    it('closes device menu when mousedown is truly outside the menu in composedPath', async () => {
+      await renderComponent();
+
+      // Open device menu
+      const deviceBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-device-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        deviceBtn.click();
+      });
+      expect(container.querySelector('[data-testid="dpa-device-menu"]')).not.toBeNull();
+
+      // Dispatch mousedown outside
+      const outsideDiv = document.createElement('div');
+      const mousedownEvent = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(mousedownEvent, 'target', {
+        value: outsideDiv,
+      });
+      Object.defineProperty(mousedownEvent, 'composedPath', {
+        value: () => [outsideDiv, document.body],
+      });
+
+      await act(async () => {
+        window.dispatchEvent(mousedownEvent);
+      });
+
+      // Menu must be closed
+      expect(container.querySelector('[data-testid="dpa-device-menu"]')).toBeNull();
+    });
+
+    it('keeps copy format menu open during mousedown within Shadow DOM and closes on outside click', async () => {
+      const onCopyPrompt = vi.fn();
+      await renderComponent({ onCopyPrompt });
+
+      // Open copy format menu
+      const toggleBtn = container.querySelector(
+        '[data-testid="dpa-copy-format-toggle-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        toggleBtn.click();
+      });
+      expect(container.querySelector('[data-testid="dpa-copy-menu"]')).not.toBeNull();
+
+      const copyMenuWrap = container.querySelector('.dpa-copy-btn-wrap') as HTMLElement;
+      const jsonBtn = container.querySelector(
+        '[data-testid="dpa-copy-json-btn"]'
+      ) as HTMLButtonElement;
+      expect(jsonBtn).not.toBeNull();
+
+      // Retargeted mousedown inside copyMenuWrap
+      const mousedownInside = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(mousedownInside, 'target', {
+        value: document.body,
+      });
+      Object.defineProperty(mousedownInside, 'composedPath', {
+        value: () => [jsonBtn, copyMenuWrap, container, document.body],
+      });
+
+      await act(async () => {
+        window.dispatchEvent(mousedownInside);
+      });
+
+      // Menu remains open
+      expect(container.querySelector('[data-testid="dpa-copy-menu"]')).not.toBeNull();
+
+      // Outside mousedown
+      const outsideDiv = document.createElement('div');
+      const mousedownOutside = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(mousedownOutside, 'composedPath', {
+        value: () => [outsideDiv, document.body],
+      });
+
+      await act(async () => {
+        window.dispatchEvent(mousedownOutside);
+      });
+
+      expect(container.querySelector('[data-testid="dpa-copy-menu"]')).toBeNull();
+    });
+
+    it('handles toolbar minimize and expand toggles correctly', async () => {
+      const onToggleMinimize = vi.fn();
+
+      // 1. In expanded state, clicking minimize button toggles minimize
+      await renderComponent({ isMinimized: false, onToggleMinimize });
+      const minimizeBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-minimize-btn"]'
+      ) as HTMLButtonElement;
+      expect(minimizeBtn).not.toBeNull();
+
+      await act(async () => {
+        minimizeBtn.click();
+      });
+      expect(onToggleMinimize).toHaveBeenCalledTimes(1);
+
+      // 2. In minimized state, clicking the expand button toggles back
+      await renderComponent({ isMinimized: true, onToggleMinimize });
+      const expandBtn = container.querySelector(
+        '[data-testid="dpa-minimized-expand-btn"]'
+      ) as HTMLButtonElement;
+      expect(expandBtn).not.toBeNull();
+
+      await act(async () => {
+        expandBtn.click();
+      });
+      expect(onToggleMinimize).toHaveBeenCalledTimes(2);
+    });
   });
 });
