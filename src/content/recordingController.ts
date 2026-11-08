@@ -257,10 +257,22 @@ export class RecordingController {
     const offsetMs = Math.max(0, Date.now() - this.startTime);
     const selector = generateCssSelector(target);
     const tag = (target.tagName || 'INPUT').toLowerCase();
-    const inputVal =
-      target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
-        ? target.value
-        : undefined;
+    const isPassword =
+      target instanceof HTMLInputElement &&
+      (target.type === 'password' ||
+        target.autocomplete === 'current-password' ||
+        target.autocomplete === 'new-password');
+    const isMaskedField =
+      isPassword ||
+      (typeof target.matches === 'function' &&
+        target.matches('input[type="password"], [data-mask="true"], [type="password"]'));
+
+    let rawVal: string | undefined = undefined;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      rawVal = target.value;
+    }
+
+    const inputVal = isMaskedField ? '[MASKED]' : rawVal;
     const previewVal = inputVal ? ` "${inputVal.slice(0, 20)}"` : '';
 
     this.actionLogs.push({

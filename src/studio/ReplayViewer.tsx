@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Replayer } from 'rrweb';
 import { processDomSnapshot } from './StudioApp';
+import { generateCssSelector } from '../content/domExtractor';
 
 export function maskRrwebEvents(events: any[]): any[] {
   if (!Array.isArray(events)) return [];
@@ -17,6 +18,13 @@ export function maskRrwebEvents(events: any[]): any[] {
           }
         }
       }
+      if (cloned.data?.adds && Array.isArray(cloned.data.adds)) {
+        for (const add of cloned.data.adds) {
+          if (add?.node) {
+            maskSnapshotNode(add.node);
+          }
+        }
+      }
       return cloned;
     } catch {
       return event;
@@ -29,6 +37,15 @@ function maskSnapshotNode(node: any) {
   // Node.TEXT_NODE is 3 in DOM, rrweb snapshot also uses 3 for text
   if (node.type === 3 && typeof node.textContent === 'string' && node.textContent.trim().length > 0) {
     node.textContent = '[MASKED]';
+  }
+  // Element attributes masking (value, placeholder, title, aria-label)
+  if (node.attributes && typeof node.attributes === 'object') {
+    const sensitiveAttrs = ['value', 'placeholder', 'title', 'aria-label'];
+    for (const attr of sensitiveAttrs) {
+      if (typeof node.attributes[attr] === 'string' && node.attributes[attr].trim().length > 0) {
+        node.attributes[attr] = '[MASKED]';
+      }
+    }
   }
   if (Array.isArray(node.childNodes)) {
     for (const child of node.childNodes) {
@@ -110,11 +127,7 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
       if (!target || target === doc.body || target === doc.documentElement) return;
 
       const rect = target.getBoundingClientRect();
-      const selector = target.id
-        ? `#${target.id}`
-        : target.className && typeof target.className === 'string'
-        ? `${target.tagName.toLowerCase()}.${target.className.trim().split(/\s+/).join('.')}`
-        : target.tagName.toLowerCase();
+      const selector = generateCssSelector(target);
 
       const compName = target.getAttribute('data-component') || undefined;
       const win = target.ownerDocument?.defaultView || window;
@@ -216,19 +229,28 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
   }, [processedEvents, hasRrwebEvents]);
 
   // Synchronize play / pause / seek with Replayer
+  const prevIsPlayingRef = useRef(isPlaying);
+
   useEffect(() => {
     const replayer = replayerRef.current;
     if (!replayer) return;
 
     try {
       if (isPlaying) {
-        replayer.play(currentTimeMs);
+        if (!prevIsPlayingRef.current) {
+          // Just started playing: start replayer at current time
+          replayer.play(currentTimeMs);
+        }
+        // While playing continuously, do NOT call replayer.play() on timer increments
       } else {
+        // Paused or seeked while paused
         replayer.pause(currentTimeMs);
       }
     } catch {
       // ignore
     }
+
+    prevIsPlayingRef.current = isPlaying;
   }, [isPlaying, currentTimeMs]);
 
   // Fallback: Synchronize static iframe document if no rrweb events

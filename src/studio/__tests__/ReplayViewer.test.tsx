@@ -49,7 +49,7 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
           timestamp: 1000,
         },
         {
-          type: 3, // IncrementalSnapshot
+          type: 3, // IncrementalSnapshot: texts
           data: {
             texts: [
               { id: 10, value: 'Confidential Note' },
@@ -57,11 +57,40 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
           },
           timestamp: 2000,
         },
+        {
+          type: 3, // IncrementalSnapshot with mutation adds
+          data: {
+            adds: [
+              {
+                parentId: 1,
+                nextId: null,
+                node: {
+                  type: 2,
+                  tagName: 'div',
+                  attributes: {
+                    title: 'Private Tooltip',
+                    'aria-label': 'Secret Button',
+                  },
+                  childNodes: [
+                    {
+                      type: 3,
+                      textContent: 'Dynamic Toast Message',
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          timestamp: 3000,
+        },
       ];
 
       const masked = maskRrwebEvents(sampleEvents);
       expect(masked[1].data.node.childNodes[0].textContent).toBe('[MASKED]');
       expect(masked[2].data.texts[0].value).toBe('[MASKED]');
+      expect(masked[3].data.adds[0].node.childNodes[0].textContent).toBe('[MASKED]');
+      expect(masked[3].data.adds[0].node.attributes.title).toBe('[MASKED]');
+      expect(masked[3].data.adds[0].node.attributes['aria-label']).toBe('[MASKED]');
       // Original events should not be mutated
       expect(sampleEvents[1].data.node.childNodes[0].textContent).toBe(
         'Sensitive Account Balance $1,000,000'

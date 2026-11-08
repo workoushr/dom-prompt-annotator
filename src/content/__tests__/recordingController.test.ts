@@ -71,6 +71,26 @@ describe('RecordingController (src/content/recordingController.ts)', () => {
     expect(inputLog?.summary).toContain('まねきねこ');
   });
 
+  it('masks sensitive password input values as [MASKED]', () => {
+    controller.startRecording();
+
+    const pwd = document.createElement('input');
+    pwd.id = 'password-field';
+    pwd.type = 'password';
+    pwd.value = 'SecretPass123!';
+    document.body.appendChild(pwd);
+
+    pwd.dispatchEvent(new Event('input', { bubbles: true }));
+
+    const logs = controller.getActionLogs();
+    const pwdLog = logs.find((l) => l.targetSelector.includes('password-field'));
+
+    expect(pwdLog).toBeDefined();
+    expect(pwdLog?.inputValue).toBe('[MASKED]');
+    expect(pwdLog?.summary).toContain('[MASKED]');
+    expect(pwdLog?.summary).not.toContain('SecretPass123!');
+  });
+
   it('captures scroll events with coordinates and throttles excessive events', () => {
     controller.startRecording();
 
