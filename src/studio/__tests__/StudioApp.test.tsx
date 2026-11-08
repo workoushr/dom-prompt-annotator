@@ -55,7 +55,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     return container.querySelector(selector);
   };
 
-  it('renders StudioApp with header, canvas, timeline bar, and panels', async () => {
+  it('renders StudioApp with maximized canvas, no persistent sidebars, and toggleable AnnotationsDrawer (Issue #23)', async () => {
     await renderComponent();
 
     // Header checks
@@ -72,7 +72,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     const copyBtn = container.querySelector('[data-testid="studio-copy-prompt-btn"]');
     expect(copyBtn).not.toBeNull();
 
-    // Canvas checks
+    // Canvas checks - Artboard is prioritized & maximized
     const artboard = container.querySelector('[data-testid="studio-artboard"]');
     expect(artboard).not.toBeNull();
 
@@ -83,9 +83,39 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     expect(ctaBtn).not.toBeNull();
     expect(ctaBtn?.textContent).toContain('プロプランにアップグレード');
 
-    // Panels & timeline
-    expect(container.querySelector('[data-testid="studio-left-panel"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="studio-right-panel"]')).not.toBeNull();
+    // Issue #23: Persistent sidebars must be removed
+    expect(container.querySelector('[data-testid="studio-left-panel"]')).toBeNull();
+    expect(container.querySelector('[data-testid="studio-right-panel"]')).toBeNull();
+
+    // Drawer is closed initially
+    expect(container.querySelector('[data-testid="studio-annotations-drawer"]')).toBeNull();
+
+    // Open drawer via toggle button
+    const drawerToggleBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-drawer-toggle-btn"]'
+    );
+    expect(drawerToggleBtn).not.toBeNull();
+
+    await act(async () => {
+      drawerToggleBtn?.click();
+    });
+
+    // Drawer opens and shows annotations
+    const drawer = container.querySelector('[data-testid="studio-annotations-drawer"]');
+    expect(drawer).not.toBeNull();
+    expect(container.querySelector('[data-testid="annotation-item-1"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="annotation-item-2"]')).not.toBeNull();
+
+    // Close drawer via close button
+    const closeBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-drawer-close-btn"]'
+    );
+    await act(async () => {
+      closeBtn?.click();
+    });
+    expect(container.querySelector('[data-testid="studio-annotations-drawer"]')).toBeNull();
+
+    // Timeline bar is rendered
     expect(container.querySelector('[data-testid="studio-timeline-bar"]')).not.toBeNull();
   });
 
@@ -186,9 +216,12 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
 
     await act(async () => {
       if (input) {
-        input.value = '新しい修正指示テキスト';
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        )?.set;
+        nativeSetter?.call(input, '新しい修正指示テキスト');
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
       }
     });
 
@@ -199,9 +232,92 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
       saveBtn?.click();
     });
 
-    // Left panel should now contain the new annotation
-    const leftPanel = container.querySelector('[data-testid="studio-left-panel"]');
-    expect(leftPanel?.textContent).toContain('CTAボタンをグラデーションに変更し、ホバー演出を追加');
+    // Toast alert should be displayed and popover closed
+    const toast = container.querySelector('[data-testid="studio-toast-alert"]');
+    expect(toast).not.toBeNull();
+    expect(toast?.textContent).toContain('追加しました');
+    expect(container.querySelector('[data-testid="studio-element-popover"]')).toBeNull();
+
+    // Timeline pin marker #3 should be added
+    const pin3 = container.querySelector('[data-testid="timeline-pin-annotation-3"]');
+    expect(pin3).not.toBeNull();
+
+    // Open drawer to verify the new annotation is listed
+    const drawerToggleBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-drawer-toggle-btn"]'
+    );
+    await act(async () => {
+      drawerToggleBtn?.click();
+    });
+
+    const newAnnItem = container.querySelector('[data-testid="annotation-item-3"]');
+    expect(newAnnItem).not.toBeNull();
+    expect(newAnnItem?.textContent).toContain('新しい修正指示テキスト');
+  });
+
+  it('displays skeleton ghost loader in header, artboard, and timeline while session is loading (Issue #21)', async () => {
+    delete (window as any).location;
+    window.location = new URL('https://example.com/studio.html?sessionId=loading-session') as any;
+
+    let resolveSessionCallback: ((response: any) => void) | null = null;
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: vi.fn((msg: any, cb: any) => {
+          if (msg.type === 'GET_RECORDING_SESSION') {
+            resolveSessionCallback = cb;
+          }
+        }),
+      },
+    };
+
+    await renderComponent();
+
+    // Ghost / skeleton elements must be visible during loading
+    expect(container.querySelector('[data-testid="studio-header-skeleton"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="studio-skeleton-artboard"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="studio-skeleton-timeline"]')).not.toBeNull();
+    // Replayed iframe or sample session must not be visible yet
+    expect(container.querySelector('[data-testid="studio-replayed-iframe"]')).toBeNull();
+
+    // Resolve the session data
+    await act(async () => {
+      resolveSessionCallback?.({
+        ok: true,
+        session: {
+          sessionId: 'loading-session',
+          url: 'https://example.com/loaded',
+          title: 'Loaded Real Session',
+          createdAt: new Date().toISOString(),
+          durationMs: 8000,
+          initialDomSnapshot: '<div id="loaded-dom"><h1>Real App</h1></div>',
+          annotations: [],
+          actionLogs: [],
+        },
+      });
+    });
+
+    // Skeletons disappear and actual content is displayed
+    expect(container.querySelector('[data-testid="studio-header-skeleton"]')).toBeNull();
+    expect(container.querySelector('[data-testid="studio-skeleton-artboard"]')).toBeNull();
+    expect(container.querySelector('[data-testid="studio-skeleton-timeline"]')).toBeNull();
+
+    const titleEl = container.querySelector('[data-testid="studio-session-title"]');
+    expect(titleEl?.textContent).toContain('Loaded Real Session');
+    expect(container.querySelector('[data-testid="studio-replayed-iframe"]')).not.toBeNull();
+  });
+
+  it('renders expanded width timeline bar with responsive scrubber track (Issue #24)', async () => {
+    await renderComponent();
+
+    const timelineBar = container.querySelector('[data-testid="studio-timeline-bar"]');
+    expect(timelineBar).not.toBeNull();
+    // Class checks: expanded width
+    expect(timelineBar?.className).toContain('w-[calc(100%-48px)]');
+    expect(timelineBar?.className).toContain('max-w-4xl');
+
+    const track = container.querySelector('[data-testid="timeline-track"]');
+    expect(track).not.toBeNull();
+    expect(track?.className).toContain('flex-1');
   });
 
   it('copies AI prompt to clipboard on button click', async () => {

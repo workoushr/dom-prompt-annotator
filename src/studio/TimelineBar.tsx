@@ -14,7 +14,7 @@ export interface TimelineBarProps {
   annotations?: AnnotationItem[];
 }
 
-export const TimelineBar: React.FC<TimelineBarProps> = ({
+const TimelineBarComponent: React.FC<TimelineBarProps> = ({
   currentTimeMs,
   durationMs,
   isPlaying,
@@ -37,13 +37,13 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
 
   return (
     <footer
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 h-12 bg-[#2c2c2c] border border-white/10 rounded-[14px] px-3 flex items-center gap-3 z-40 shadow-2xl backdrop-blur-md select-none text-white"
+      className="absolute bottom-4 left-1/2 -translate-x-1/2 h-14 w-[calc(100%-48px)] max-w-4xl lg:max-w-5xl bg-[#2c2c2c] border border-white/10 rounded-[16px] px-4 flex items-center gap-3.5 z-40 shadow-2xl backdrop-blur-md select-none text-white transition-all"
       data-testid="studio-timeline-bar"
     >
       {/* 1. Step Backward (-1s) */}
       <button
         type="button"
-        className="w-7 h-7 rounded hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition"
+        className="w-8 h-8 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition shrink-0"
         data-testid="timeline-step-back"
         title="1秒戻る (-1s)"
         onClick={() => onStepTime(-1000)}
@@ -54,7 +54,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
       {/* 2. Play / Pause Button */}
       <button
         type="button"
-        className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition shadow-sm active:scale-95"
+        className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition shadow-sm active:scale-95 shrink-0"
         data-testid="timeline-play-pause-btn"
         title={isPlaying ? '一時停止 (Space)' : '再生 (Space)'}
         onClick={onTogglePlay}
@@ -69,7 +69,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
       {/* 3. Step Forward (+1s) */}
       <button
         type="button"
-        className="w-7 h-7 rounded hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition"
+        className="w-8 h-8 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition shrink-0"
         data-testid="timeline-step-forward"
         title="1秒進む (+1s)"
         onClick={() => onStepTime(1000)}
@@ -77,12 +77,12 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         <ChevronRight className="w-4 h-4" />
       </button>
 
-      <div className="h-4 w-px bg-white/10" />
+      <div className="h-5 w-px bg-white/10 shrink-0" />
 
-      {/* 4. Time Display & Scrubber Track */}
-      <div className="flex items-center gap-2.5 w-72 sm:w-80 md:w-96">
+      {/* 4. Time Display & Scrubber Track (Expanded Responsive Width) */}
+      <div className="flex-1 flex items-center gap-3 min-w-0">
         <span
-          className="font-mono text-[11px] text-white w-32 shrink-0 text-center"
+          className="font-mono text-xs text-white shrink-0 text-center select-none"
           data-testid="timeline-time-display"
         >
           {formatTimestampOffset(clampedCurrent)} / {formatTimestampOffset(safeDuration)}
@@ -90,7 +90,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
 
         {/* Track container */}
         <div
-          className="flex-1 h-2 bg-zinc-700/60 hover:bg-zinc-700/80 rounded-full relative cursor-pointer group"
+          className="flex-1 h-2.5 bg-zinc-700/60 hover:bg-zinc-700/80 rounded-full relative cursor-pointer group"
           onClick={handleTrackClick}
           data-testid="timeline-track"
           role="slider"
@@ -105,7 +105,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
             data-testid="timeline-progress-fill"
           >
             {/* Scrubber thumb */}
-            <div className="absolute -right-2 -top-1 w-4 h-4 rounded-full bg-white shadow-md border-2 border-[#0d99ff] scale-90 group-hover:scale-110 transition-transform" />
+            <div className="absolute -right-2.5 -top-1 w-4.5 h-4.5 rounded-full bg-white shadow-md border-2 border-[#0d99ff] scale-90 group-hover:scale-110 transition-transform" />
           </div>
 
           {/* Event Pins: User Actions (Indigo for click/input, Amber for mutation) */}
@@ -118,7 +118,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
               <button
                 key={log.id}
                 type="button"
-                className={`absolute top-1/2 -translate-y-1/2 -ml-1 w-2 h-2 rounded-full ${pinColor} hover:scale-150 transition-transform cursor-pointer shadow-sm z-10`}
+                className={`absolute top-1/2 -translate-y-1/2 -ml-1 w-2.5 h-2.5 rounded-full ${pinColor} hover:scale-150 transition-transform cursor-pointer shadow-sm z-10`}
                 style={{ left: `${leftPct}%` }}
                 title={`[${formatTimestampOffset(log.offsetMs)}] ${log.kind}: ${log.summary}`}
                 data-testid={`timeline-pin-action-${log.id}`}
@@ -139,7 +139,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
               <button
                 key={ann.id}
                 type="button"
-                className="absolute top-1/2 -translate-y-1/2 -ml-1.5 w-3 h-3 rounded-full bg-[#0d99ff] ring-2 ring-white hover:scale-150 transition-transform cursor-pointer shadow-md z-20"
+                className="absolute top-1/2 -translate-y-1/2 -ml-2 w-3.5 h-3.5 rounded-full bg-[#0d99ff] ring-2 ring-white hover:scale-150 transition-transform cursor-pointer shadow-md z-20"
                 style={{ left: `${leftPct}%` }}
                 title={`#${ann.id} (${formatTimestampOffset(ann.timestampMs)}): ${ann.instruction || ann.element.selector}`}
                 data-testid={`timeline-pin-annotation-${ann.id}`}
@@ -153,16 +153,18 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         </div>
       </div>
 
-      <div className="h-4 w-px bg-white/10" />
+      <div className="h-5 w-px bg-white/10 shrink-0" />
 
       {/* 5. Total Duration Pill */}
       <div
-        className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-400 text-[10px] font-semibold font-mono"
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-400 text-xs font-semibold font-mono shrink-0"
         data-testid="timeline-duration-badge"
       >
-        <CircleDot className="w-2.5 h-2.5 text-rose-500" />
+        <CircleDot className="w-3 h-3 text-rose-500" />
         <span>{(safeDuration / 1000).toFixed(1)}s</span>
       </div>
     </footer>
   );
 };
+
+export const TimelineBar = React.memo(TimelineBarComponent);

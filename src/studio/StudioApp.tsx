@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   AnnotationItem,
   DEVICE_PRESETS,
@@ -25,6 +25,9 @@ import {
   ExternalLink,
   Code2,
   Sparkles,
+  Layers,
+  X,
+  Loader2,
 } from 'lucide-react';
 
 export function processDomSnapshot(html: string, maskAllText: boolean): string {
@@ -225,6 +228,18 @@ export const StudioApp: React.FC = () => {
   const [artboardHeight, setArtboardHeight] = useState(680);
   const [maskAllText, setMaskAllText] = useState(false);
 
+  // Loading state (prevents SAMPLE_SESSION ghost display when loading actual session)
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      return Boolean(urlParams.get('sessionId'));
+    }
+    return false;
+  });
+
+  // Drawer state for replacing persistent sidebars
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
   // Inspector & Popover state
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<number | null>(2);
   const [popoverTarget, setPopoverTarget] = useState<{
@@ -244,8 +259,8 @@ export const StudioApp: React.FC = () => {
     return processDomSnapshot(session.initialDomSnapshot || '', maskAllText);
   }, [session.initialDomSnapshot, maskAllText]);
 
-  // Synchronize iframe document and attach click inspection listener
-  useEffect(() => {
+  // Robust iframe document synchronization and inspection event listener binding
+  const bindIframeListeners = useCallback(() => {
     const iframe = iframeRef.current;
     if (!iframe || !session.initialDomSnapshot) return;
 
@@ -253,7 +268,7 @@ export const StudioApp: React.FC = () => {
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!doc) return;
 
-      // Populate document reliably in both browsers and jsdom
+      // Synchronize processedSnapshot reliably across both browsers and jsdom
       doc.documentElement.innerHTML = processedSnapshot;
 
       let lastHovered: HTMLElement | null = null;
@@ -302,9 +317,27 @@ export const StudioApp: React.FC = () => {
             ? 'CTAボタンをグラデーションに変更し、ホバー演出を追加'
             : ''
         );
+
+        // Clamping popover coordinates so it never overflows the artboard boundaries
+        const notchOffset = selectedDevice.mobile ? 24 : 0;
+        const popoverWidth = 300;
+        const popoverHeight = 180;
+        const rawTop = notchOffset + rect.bottom + 8;
+        const rawLeft = rect.left;
+
+        const clampedTop =
+          rawTop + popoverHeight > artboardHeight
+            ? Math.max(notchOffset + 8, notchOffset + rect.top - popoverHeight - 8)
+            : rawTop;
+
+        const clampedLeft = Math.max(
+          12,
+          Math.min(rawLeft, Math.max(12, artboardWidth - popoverWidth - 12))
+        );
+
         setPopoverPos({
-          top: Math.max(20, Math.min(rect.bottom + 10, artboardHeight - 200)),
-          left: Math.max(20, Math.min(rect.left, 200)),
+          top: clampedTop,
+          left: clampedLeft,
         });
       };
 
@@ -320,7 +353,15 @@ export const StudioApp: React.FC = () => {
     } catch {
       // Ignore cross-origin error if any
     }
-  }, [processedSnapshot, session.initialDomSnapshot, artboardHeight]);
+  }, [processedSnapshot, session.initialDomSnapshot, selectedDevice.mobile, artboardWidth, artboardHeight]);
+
+  // Synchronize iframe listeners on snapshot changes
+  useEffect(() => {
+    const cleanup = bindIframeListeners();
+    return () => {
+      cleanup?.();
+    };
+  }, [bindIframeListeners]);
 
   // Toast / feedback alert
   const [toastAlert, setToastAlert] = useState<string | null>(null);
@@ -331,10 +372,22 @@ export const StudioApp: React.FC = () => {
     const sessionId = urlParams.get('sessionId');
 
     if (sessionId) {
+      setIsLoading(true);
+      let didRespond = false;
+
+      // Timeout fallback in case background service worker does not respond
+      const timer = setTimeout(() => {
+        if (!didRespond) {
+          setIsLoading(false);
+        }
+      }, 3000);
+
       if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
         chrome.runtime.sendMessage(
           { type: 'GET_RECORDING_SESSION', sessionId },
           (response: { ok?: boolean; session?: RecordingSession }) => {
+            didRespond = true;
+            clearTimeout(timer);
             if (response?.ok && response.session) {
               setSession(response.session);
               setMaskAllText(Boolean(response.session.maskingConfig?.maskAllText));
@@ -342,30 +395,47 @@ export const StudioApp: React.FC = () => {
                 setArtboardWidth(response.session.viewport.width);
               }
             }
+            setIsLoading(false);
           }
         );
+      } else {
+        clearTimeout(timer);
+        setIsLoading(false);
       }
+
+      return () => {
+        clearTimeout(timer);
+      };
+    } else {
+      setIsLoading(false);
     }
   }, []);
 
-  // Timer loop for playback
+  // Performance-optimized playback loop via requestAnimationFrame
   useEffect(() => {
-    let timer: number | null = null;
-    if (isPlaying) {
-      timer = window.setInterval(() => {
+    if (!isPlaying) return;
+
+    let animationFrameId: number;
+    let lastTime = performance.now();
+
+    const tick = (now: number) => {
+      const delta = now - lastTime;
+      if (delta >= 50) {
+        lastTime = now - (delta % 50);
         setCurrentTimeMs((prev) => {
           if (prev >= session.durationMs) {
             setIsPlaying(false);
             return session.durationMs;
           }
-          return Math.min(prev + 50, session.durationMs);
+          return Math.min(prev + delta, session.durationMs);
         });
-      }, 50);
-    }
-    return () => {
-      if (timer !== null) {
-        window.clearInterval(timer);
       }
+      animationFrameId = requestAnimationFrame(tick);
+    };
+
+    animationFrameId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(animationFrameId);
     };
   }, [isPlaying, session.durationMs]);
 
@@ -565,23 +635,31 @@ export const StudioApp: React.FC = () => {
 
           <div className="h-3.5 w-px bg-white/10" />
 
-          {/* Session Title & Duration */}
-          <div className="flex items-center gap-1.5 text-xs text-zinc-400">
-            <span
-              className="text-white font-medium hover:bg-white/5 px-1.5 py-0.5 rounded cursor-pointer transition truncate max-w-[200px]"
-              title={session.title}
-              data-testid="studio-session-title"
-            >
-              {maskAllText ? '[MASKED SESSION]' : session.title}
-            </span>
-            <span className="text-[10px] text-zinc-600">/</span>
-            <span className="text-[11px] text-zinc-400 font-mono" data-testid="studio-session-duration">
-              {(session.durationMs / 1000).toFixed(1)}s
-            </span>
-          </div>
+          {/* Session Title & Duration (Skeleton during session loading) */}
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-zinc-400" data-testid="studio-header-skeleton">
+              <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
+              <span className="text-[10px] text-zinc-600">/</span>
+              <div className="h-4 w-12 bg-white/10 rounded animate-pulse" />
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <span
+                className="text-white font-medium hover:bg-white/5 px-1.5 py-0.5 rounded cursor-pointer transition truncate max-w-[200px]"
+                title={session.title}
+                data-testid="studio-session-title"
+              >
+                {maskAllText ? '[MASKED SESSION]' : session.title}
+              </span>
+              <span className="text-[10px] text-zinc-600">/</span>
+              <span className="text-[11px] text-zinc-400 font-mono" data-testid="studio-session-duration">
+                {(session.durationMs / 1000).toFixed(1)}s
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Top-Right Island: maskAllText Toggle, Device Preset, Prompt Export */}
+        {/* Top-Right Island: Drawer Toggle, maskAllText Toggle, Device Preset, Prompt Export */}
         <div className="bg-[#2c2c2c] border border-white/10 rounded-[14px] shadow-xl px-3 h-11 flex items-center gap-2 pointer-events-auto backdrop-blur-md">
           {/* Device Preset Selector */}
           <div className="flex items-center gap-1 bg-[#1e1e1e] px-2 py-1 rounded-lg border border-white/10 text-xs">
@@ -635,6 +713,32 @@ export const StudioApp: React.FC = () => {
                 <span>全文テキストマスク</span>
               </>
             )}
+          </button>
+
+          <div className="h-3.5 w-px bg-white/10" />
+
+          {/* 🎯 Annotations Drawer Toggle Button (Replaces sidebars, opens slide-over drawer) */}
+          <button
+            type="button"
+            onClick={() => setIsDrawerOpen((prev) => !prev)}
+            className={`h-7 px-2.5 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition-all shadow-sm ${
+              isDrawerOpen
+                ? 'bg-[#0d99ff] border-[#0d99ff] text-white'
+                : 'bg-[#1e1e1e] border-white/10 text-zinc-300 hover:text-white hover:bg-white/5'
+            }`}
+            data-testid="studio-drawer-toggle-btn"
+            title="指示（アノテーション）一覧・プロパティドロワーを開閉"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>🎯 指示一覧</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                isDrawerOpen ? 'bg-white/25 text-white' : 'bg-white/10 text-zinc-300'
+              }`}
+              data-testid="studio-drawer-count-badge"
+            >
+              {session.annotations.length}
+            </span>
           </button>
 
           <div className="h-3.5 w-px bg-white/10" />
@@ -695,8 +799,34 @@ export const StudioApp: React.FC = () => {
               </div>
             )}
 
-            {/* REPLAYED WEB APP CONTENT */}
-            {session.initialDomSnapshot ? (
+            {/* REPLAYED WEB APP CONTENT OR SKELETON LOADER */}
+            {isLoading ? (
+              <div
+                className="flex-1 flex flex-col bg-[#18181b] p-6 justify-between animate-pulse select-none text-zinc-400"
+                data-testid="studio-skeleton-artboard"
+              >
+                <div className="space-y-4">
+                  {/* Skeleton Header */}
+                  <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                    <div className="h-4 w-28 bg-white/10 rounded" />
+                    <div className="w-6 h-6 rounded-full bg-white/10" />
+                  </div>
+                  {/* Skeleton Card */}
+                  <div className="p-4 rounded-xl border border-white/5 bg-white/5 space-y-2.5">
+                    <div className="h-3 w-20 bg-white/10 rounded" />
+                    <div className="h-6 w-36 bg-white/15 rounded" />
+                    <div className="h-3 w-24 bg-white/10 rounded" />
+                  </div>
+                  {/* Skeleton Action CTA */}
+                  <div className="h-10 w-full bg-white/10 rounded-lg" />
+                </div>
+                {/* Centered Loading Feedback */}
+                <div className="flex items-center justify-center gap-2 text-xs text-zinc-400 py-6">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#0d99ff]" />
+                  <span>セッションデータを読み込み中...</span>
+                </div>
+              </div>
+            ) : session.initialDomSnapshot ? (
               <div
                 className="flex-1 bg-white overflow-hidden relative"
                 data-testid="studio-replayed-iframe-wrap"
@@ -708,6 +838,7 @@ export const StudioApp: React.FC = () => {
                   srcDoc={processedSnapshot}
                   sandbox="allow-same-origin allow-scripts"
                   data-testid="studio-replayed-iframe"
+                  onLoad={bindIframeListeners}
                 />
               </div>
             ) : (
@@ -786,220 +917,227 @@ export const StudioApp: React.FC = () => {
       </main>
 
       {/* ========================================================================= */}
-      {/* 3. FIGMA UI3 LEFT FLOATING PANEL (Annotations & Action Logs) */}
+      {/* 3. SLIDE-OVER ANNOTATIONS & INSPECTOR DRAWER (Figma UI3 Style)           */}
       {/* ========================================================================= */}
-      <aside
-        className="bg-[#2c2c2c] border border-white/10 rounded-[14px] shadow-2xl backdrop-blur-md absolute top-16 left-3 bottom-20 w-64 flex flex-col z-30 pointer-events-auto"
-        data-testid="studio-left-panel"
-      >
-        {/* Panel Header */}
-        <div className="h-9 px-3 border-b border-white/10 flex items-center justify-between shrink-0">
-          <span className="text-[11px] font-semibold text-white tracking-tight">Annotations</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-zinc-300">
-            {session.annotations.length} items
-          </span>
-        </div>
-
-        {/* Tree / Card List */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {session.annotations.map((ann) => {
-            const isSelected = selectedAnnotationId === ann.id;
-            return (
-              <div
-                key={ann.id}
-                onClick={() => {
-                  setSelectedAnnotationId(ann.id);
-                  if (typeof ann.timestampMs === 'number') {
-                    handleSeek(ann.timestampMs);
-                  }
-                }}
-                className={`p-2 rounded-lg cursor-pointer transition border ${
-                  isSelected
-                    ? 'bg-[#0d99ff]/15 border-[#0d99ff]/40 text-white'
-                    : 'hover:bg-white/5 border-transparent text-zinc-300'
-                }`}
-                data-testid={`annotation-item-${ann.id}`}
-              >
-                <div className="flex items-center justify-between text-[11px]">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3.5 h-3.5 rounded bg-[#0d99ff] text-white text-[9px] font-bold flex items-center justify-center">
-                      {ann.id}
-                    </span>
-                    <span className="font-medium text-white truncate max-w-[130px]">
-                      {ann.element.selector}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {typeof ann.timestampMs === 'number' && (
-                      <span className="text-[10px] text-amber-400 font-mono">
-                        {formatTimestampOffset(ann.timestampMs)}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteAnnotation(ann.id);
-                      }}
-                      className="text-zinc-500 hover:text-rose-400 p-0.5"
-                      title="削除"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-                <div className="text-[10px] text-zinc-300 pl-5 line-clamp-2 mt-0.5">
-                  {ann.instruction}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Panel Footer: Global Context */}
-        <div className="p-2.5 border-t border-white/10 bg-[#222222]/50 rounded-b-[14px]">
-          <div className="text-[10px] font-medium text-zinc-400 mb-1">PROMPT CONTEXT</div>
-          <input
-            type="text"
-            className="w-full h-6 bg-[#1e1e1e] border border-white/10 rounded px-2 text-[10px] text-white focus:outline-none focus:border-[#0d99ff]"
-            value={session.globalInstruction || ''}
-            onChange={(e) =>
-              setSession((prev) => ({ ...prev, globalInstruction: e.target.value }))
-            }
-            placeholder="ページ全体の前提..."
-            data-testid="studio-global-instruction-input"
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end select-none">
+          {/* Dimmed backdrop */}
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity"
+            onClick={() => setIsDrawerOpen(false)}
+            data-testid="studio-drawer-backdrop"
           />
-        </div>
-      </aside>
 
-      {/* ========================================================================= */}
-      {/* 4. FIGMA UI3 RIGHT FLOATING PANEL (Properties & Inspector Rows) */}
-      {/* ========================================================================= */}
-      <aside
-        className="bg-[#2c2c2c] border border-white/10 rounded-[14px] shadow-2xl backdrop-blur-md absolute top-16 right-3 bottom-20 w-64 flex flex-col z-30 pointer-events-auto"
-        data-testid="studio-right-panel"
-      >
-        {/* Panel Header */}
-        <div className="h-9 px-2 border-b border-white/10 flex items-center shrink-0">
-          <div className="w-full grid grid-cols-2 bg-[#1e1e1e] p-0.5 rounded-md border border-white/10 text-[10px] font-medium">
-            <button className="py-0.5 rounded bg-[#2c2c2c] text-white shadow-sm">Inspect</button>
-            <button
-              onClick={() => void handleCopyPrompt('json')}
-              className="py-0.5 text-zinc-400 hover:text-white"
-            >
-              JSON
-            </button>
-          </div>
-        </div>
-
-        {/* Inspector Property Rows */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-3.5 text-xs">
-          {/* Frame Dimensions */}
-          <div>
-            <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
-              Frame Dimensions
+          {/* Drawer content */}
+          <div
+            className="relative w-80 sm:w-96 h-full bg-[#242424] border-l border-white/10 shadow-2xl flex flex-col z-10 animate-in slide-in-from-right duration-200"
+            data-testid="studio-annotations-drawer"
+          >
+            {/* Drawer Header */}
+            <div className="h-12 px-4 border-b border-white/10 flex items-center justify-between shrink-0 bg-[#2c2c2c]">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-[#0d99ff]" />
+                <span className="text-xs font-semibold text-white tracking-tight">
+                  指示一覧 (Annotations)
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-zinc-300">
+                  {session.annotations.length} items
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDrawerOpen(false)}
+                className="w-7 h-7 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition"
+                data-testid="studio-drawer-close-btn"
+                title="閉じる"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              <div className="flex items-center bg-[#1e1e1e] border border-white/10 rounded px-2 h-7 text-[11px]">
-                <span className="text-zinc-500 mr-1.5 text-[10px]">W</span>
-                <span className="font-mono">{artboardWidth}</span>
-              </div>
-              <div className="flex items-center bg-[#1e1e1e] border border-white/10 rounded px-2 h-7 text-[11px]">
-                <span className="text-zinc-500 mr-1.5 text-[10px]">H</span>
-                <span className="font-mono">{artboardHeight}</span>
-              </div>
-            </div>
-          </div>
 
-          <div className="h-px bg-white/10" />
-
-          {/* Selected Element Specs */}
-          {selectedAnnotation ? (
-            <div>
-              <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
-                Selected Element (#{selectedAnnotation.id})
+            {/* Drawer Body: Annotations List & Selected Details */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
+              <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                タイムライン指示リスト
               </div>
-              <div className="space-y-1.5">
-                <div className="bg-[#1e1e1e] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-indigo-300 break-all">
-                  {selectedAnnotation.element.selector}
+
+              {session.annotations.length === 0 ? (
+                <div className="p-6 text-center text-zinc-500 text-xs bg-[#1e1e1e] rounded-xl border border-white/5">
+                  指示がありません。画面上のDOM要素をクリックして指示を追加できます。
                 </div>
-                {selectedAnnotation.element.framework?.componentName && (
-                  <div className="bg-[#1e1e1e] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-emerald-400">
-                    React: {selectedAnnotation.element.framework.componentName}
-                  </div>
-                )}
-                {selectedAnnotation.element.textContent && (
-                  <div className="bg-[#1e1e1e] border border-white/10 rounded px-2 py-1 text-[10px] text-zinc-300 line-clamp-2">
-                    Text: {displaySampleText(selectedAnnotation.element.textContent)}
-                  </div>
-                )}
-              </div>
-
-              {/* Trigger Action Context */}
-              {selectedAnnotation.triggerContext && selectedAnnotation.triggerContext.length > 0 && (
-                <div className="mt-2.5">
-                  <div className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider mb-1">
-                    直前の操作トリガー
-                  </div>
-                  <div className="space-y-1">
-                    {selectedAnnotation.triggerContext.map((trig) => (
-                      <div
-                        key={trig.id}
-                        className="bg-[#1e1e1e] border border-white/10 rounded p-1.5 text-[10px]"
-                      >
-                        <span className="text-zinc-400 font-mono">
-                          [{formatTimestampOffset(trig.offsetMs)}]{' '}
-                        </span>
-                        <span className="text-indigo-300 font-medium">{trig.kind}: </span>
-                        <span className="text-zinc-200">
-                          {maskAllText ? '[MASKED]' : trig.targetLabel || trig.targetSelector}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-zinc-500 text-[10px]">要素が選択されていません</div>
-          )}
-
-          <div className="h-px bg-white/10" />
-
-          {/* Prompt Preview Snippet */}
-          <div>
-            <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
-              Markdown Output Preview
-            </div>
-            <div className="bg-[#1e1e1e] p-2 rounded-lg border border-white/10 text-[9px] font-mono text-zinc-300 leading-relaxed select-text max-h-36 overflow-y-auto">
-              {selectedAnnotation ? (
-                <>
-                  <div>### 🎯 指示 #{selectedAnnotation.id}</div>
-                  <div>- Target: `{selectedAnnotation.element.selector}`</div>
-                  <div>- Action: {selectedAnnotation.instruction}</div>
-                  {maskAllText && <div className="text-purple-400">- Masking: [MASKED ALL TEXT]</div>}
-                </>
               ) : (
-                <div>指示を選択してください</div>
+                session.annotations.map((ann) => {
+                  const isSelected = selectedAnnotationId === ann.id;
+                  return (
+                    <div
+                      key={ann.id}
+                      onClick={() => {
+                        setSelectedAnnotationId(ann.id);
+                        if (typeof ann.timestampMs === 'number') {
+                          handleSeek(ann.timestampMs);
+                        }
+                      }}
+                      className={`p-2.5 rounded-xl cursor-pointer transition border ${
+                        isSelected
+                          ? 'bg-[#0d99ff]/15 border-[#0d99ff]/40 text-white'
+                          : 'bg-[#1e1e1e]/60 hover:bg-white/5 border-white/5 text-zinc-300'
+                      }`}
+                      data-testid={`annotation-item-${ann.id}`}
+                    >
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-4 h-4 rounded-full bg-[#0d99ff] text-white text-[9px] font-bold flex items-center justify-center">
+                            {ann.id}
+                          </span>
+                          <span className="font-mono text-zinc-200 truncate max-w-[150px]">
+                            {ann.element.selector}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {typeof ann.timestampMs === 'number' && (
+                            <span className="text-[10px] text-amber-400 font-mono">
+                              {formatTimestampOffset(ann.timestampMs)}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteAnnotation(ann.id);
+                            }}
+                            className="text-zinc-500 hover:text-rose-400 p-1 rounded hover:bg-white/10 transition"
+                            title="削除"
+                            data-testid={`delete-annotation-btn-${ann.id}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-zinc-300 pl-5 leading-relaxed">
+                        {ann.instruction}
+                      </div>
+                    </div>
+                  );
+                })
               )}
+
+              {/* Inspector details for selected annotation */}
+              {selectedAnnotation && (
+                <div className="mt-4 pt-3 border-t border-white/10 space-y-2.5">
+                  <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                    選択中の詳細 (#{selectedAnnotation.id})
+                  </div>
+                  <div className="bg-[#1e1e1e] p-2.5 rounded-xl border border-white/10 space-y-2 text-xs">
+                    <div>
+                      <div className="text-[9px] text-zinc-400 uppercase font-semibold mb-0.5">Selector</div>
+                      <div className="font-mono text-[10px] text-indigo-300 break-all bg-black/20 p-1.5 rounded">
+                        {selectedAnnotation.element.selector}
+                      </div>
+                    </div>
+                    {selectedAnnotation.element.framework?.componentName && (
+                      <div>
+                        <div className="text-[9px] text-zinc-400 uppercase font-semibold mb-0.5">React Component</div>
+                        <div className="text-[10px] text-emerald-400 font-mono bg-black/20 p-1.5 rounded">
+                          {selectedAnnotation.element.framework.componentName}
+                        </div>
+                      </div>
+                    )}
+                    {selectedAnnotation.element.textContent && (
+                      <div>
+                        <div className="text-[9px] text-zinc-400 uppercase font-semibold mb-0.5">Element Text</div>
+                        <div className="text-[10px] text-zinc-300 line-clamp-2 bg-black/20 p-1.5 rounded">
+                          {displaySampleText(selectedAnnotation.element.textContent)}
+                        </div>
+                      </div>
+                    )}
+                    {selectedAnnotation.triggerContext && selectedAnnotation.triggerContext.length > 0 && (
+                      <div>
+                        <div className="text-[9px] text-amber-400 uppercase font-semibold mb-1">直前操作トリガー</div>
+                        <div className="space-y-1">
+                          {selectedAnnotation.triggerContext.map((trig) => (
+                            <div key={trig.id} className="text-[10px] text-zinc-300 bg-black/20 p-1.5 rounded">
+                              <span className="text-zinc-500 font-mono">[{formatTimestampOffset(trig.offsetMs)}] </span>
+                              <span className="text-indigo-300 font-medium">{trig.kind}: </span>
+                              <span>{maskAllText ? '[MASKED]' : trig.targetLabel || trig.targetSelector}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Markdown snippet */}
+                    <div className="pt-2 border-t border-white/5">
+                      <div className="text-[9px] text-zinc-400 uppercase font-semibold mb-1">Markdown Output</div>
+                      <div className="bg-black/30 p-2 rounded-lg font-mono text-[9px] text-zinc-300 leading-relaxed select-text max-h-28 overflow-y-auto">
+                        <div>### 🎯 指示 #{selectedAnnotation.id}</div>
+                        <div>- Target: `{selectedAnnotation.element.selector}`</div>
+                        <div>- Action: {selectedAnnotation.instruction}</div>
+                        {maskAllText && <div className="text-purple-400">- Masking: [MASKED ALL TEXT]</div>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Drawer Footer: Global Prompt Context & JSON Export */}
+            <div className="p-3 border-t border-white/10 bg-[#202020] space-y-2 shrink-0">
+              <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                <span className="font-medium">ページ全体の前提 (GLOBAL CONTEXT)</span>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyPrompt('json')}
+                  className="hover:text-white underline text-[10px]"
+                >
+                  JSON出力
+                </button>
+              </div>
+              <input
+                type="text"
+                className="w-full h-7 bg-[#18181b] border border-white/10 rounded-lg px-2 text-xs text-white focus:outline-none focus:border-[#0d99ff]"
+                value={session.globalInstruction || ''}
+                onChange={(e) =>
+                  setSession((prev) => ({ ...prev, globalInstruction: e.target.value }))
+                }
+                placeholder="ページ全体の前提コンテキスト..."
+                data-testid="studio-global-instruction-input"
+              />
             </div>
           </div>
         </div>
-      </aside>
+      )}
 
       {/* ========================================================================= */}
       {/* 5. FIGMA UI3 FLOATING BOTTOM TOOLBAR (Scrubber & Markers) */}
       {/* ========================================================================= */}
-      <TimelineBar
-        currentTimeMs={currentTimeMs}
-        durationMs={session.durationMs}
-        isPlaying={isPlaying}
-        onTogglePlay={() => setIsPlaying(!isPlaying)}
-        onSeek={handleSeek}
-        onStepTime={handleStepTime}
-        actionLogs={session.actionLogs}
-        annotations={session.annotations}
-      />
+      {isLoading ? (
+        <div
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 h-14 w-[calc(100%-48px)] max-w-4xl lg:max-w-5xl bg-[#2c2c2c]/80 border border-white/10 rounded-[16px] px-4 flex items-center gap-3.5 z-40 backdrop-blur-md select-none animate-pulse"
+          data-testid="studio-skeleton-timeline"
+        >
+          <div className="w-8 h-8 rounded-lg bg-white/10 shrink-0" />
+          <div className="w-9 h-9 rounded-xl bg-white/10 shrink-0" />
+          <div className="w-8 h-8 rounded-lg bg-white/10 shrink-0" />
+          <div className="h-5 w-px bg-white/10 shrink-0" />
+          <div className="flex-1 flex items-center gap-3 min-w-0">
+            <div className="w-24 h-4 bg-white/10 rounded shrink-0" />
+            <div className="flex-1 h-2.5 bg-white/10 rounded-full" />
+          </div>
+          <div className="h-5 w-px bg-white/10 shrink-0" />
+          <div className="w-14 h-6 rounded-lg bg-white/10 shrink-0" />
+        </div>
+      ) : (
+        <TimelineBar
+          currentTimeMs={currentTimeMs}
+          durationMs={session.durationMs}
+          isPlaying={isPlaying}
+          onTogglePlay={() => setIsPlaying(!isPlaying)}
+          onSeek={handleSeek}
+          onStepTime={handleStepTime}
+          actionLogs={session.actionLogs}
+          annotations={session.annotations}
+        />
+      )}
 
       {/* Toast Alert */}
       {toastAlert && (
