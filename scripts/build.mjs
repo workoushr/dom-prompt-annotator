@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { sanitizeDistNoncharacters, checkDistNoncharacters } from './verify-dist.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +27,9 @@ async function runBuild() {
       alias: {
         '@': resolve(rootDir, 'src'),
       },
+    },
+    esbuild: {
+      charset: 'ascii',
     },
     build: {
       outDir: distDir,
@@ -75,6 +79,9 @@ async function runBuild() {
       define: {
         'process.env.NODE_ENV': JSON.stringify('production'),
       },
+      esbuild: {
+        charset: 'ascii',
+      },
       build: {
         outDir: distDir,
         emptyOutDir: false,
@@ -94,7 +101,20 @@ async function runBuild() {
     });
   }
 
-  console.log('Build completed successfully in dist/');
+  // Failsafe sanitization for any remaining noncharacters (e.g. U+FFFE, U+FFFF)
+  const sanitizedCount = sanitizeDistNoncharacters(distDir);
+  if (sanitizedCount > 0) {
+    console.log(`Sanitized ${sanitizedCount} file(s) containing raw noncharacters.`);
+  }
+
+  // Strict validation to prevent Chrome extension loader rejection ("It isn't UTF-8 encoded")
+  const errors = checkDistNoncharacters(distDir);
+  if (errors.length > 0) {
+    const detail = errors.map((e) => `  - ${e.file} at byte offset ${e.offset}: ${e.noncharacter}`).join('\n');
+    throw new Error(`Build verification failed! Raw Unicode noncharacters found in dist:\n${detail}`);
+  }
+
+  console.log('Build completed and verified successfully in dist/');
 }
 
 runBuild().catch((err) => {
