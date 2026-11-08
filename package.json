@@ -1,7 +1,7 @@
 {
   "name": "dom-prompt-annotator",
   "private": true,
-  "version": "0.2.0-beta.4",
+  "version": "0.2.0-beta.5",
   "type": "module",
   "description": "Chrome Extension (Manifest V3) to inspect DOM elements, attach numbered instructions, mask sensitive data, and export AI-ready prompts.",
   "scripts": {
