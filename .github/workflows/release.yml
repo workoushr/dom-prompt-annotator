@@ -29,14 +29,20 @@ jobs:
 
       - name: Package extension zip
         run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ]; then
+            TAG_NAME=$(node -p "require('./package.json').version")
+            TAG_NAME="v${TAG_NAME#v}"
+          fi
           cd dist
-          zip -r ../dom-prompt-annotator-v0.1.0.zip .
+          zip -r "../dom-prompt-annotator-${TAG_NAME}.zip" .
           cd ..
+          echo "ZIP_PATH=dom-prompt-annotator-${TAG_NAME}.zip" >> $GITHUB_ENV
 
       - name: Upload zip to Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
-          files: dom-prompt-annotator-v0.1.0.zip
+          tag_name: ${{ github.ref_name }}
+          files: ${{ env.ZIP_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
