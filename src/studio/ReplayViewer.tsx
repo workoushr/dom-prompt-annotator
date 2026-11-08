@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useCallback } from 'react';
 import { Replayer } from 'rrweb';
 import { processDomSnapshot } from './StudioApp';
 import { generateCssSelector } from '../content/domExtractor';
@@ -54,6 +54,92 @@ function maskSnapshotNode(node: any) {
   }
 }
 
+export function attachIframeListeners(
+  docOrIframe: Document | HTMLIFrameElement,
+  options: {
+    maskAllText?: boolean;
+    onSelectElement?: (data: SelectedElementData) => void;
+  } = {}
+): (() => void) | undefined {
+  if (!docOrIframe) return undefined;
+
+  const doc: Document | null =
+    'contentDocument' in docOrIframe
+      ? docOrIframe.contentDocument || docOrIframe.contentWindow?.document || null
+      : (docOrIframe as Document);
+
+  if (!doc || typeof doc.addEventListener !== 'function') return undefined;
+
+  let lastHovered: HTMLElement | null = null;
+  const handleMouseOver = (ev: MouseEvent) => {
+    const target = ev.target as HTMLElement;
+    if (!target || target === doc.body || target === doc.documentElement) return;
+    if (lastHovered && lastHovered !== target) {
+      lastHovered.classList.remove('dpa-hover-target');
+    }
+    target.classList.add('dpa-hover-target');
+    lastHovered = target;
+  };
+
+  const handleMouseOut = (ev: MouseEvent) => {
+    const target = ev.target as HTMLElement;
+    target?.classList?.remove('dpa-hover-target');
+  };
+
+  const handleClick = (ev: MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const target = ev.target as HTMLElement;
+    if (!target || target === doc.body || target === doc.documentElement) return;
+
+    const rect = target.getBoundingClientRect();
+    const selector = generateCssSelector(target);
+
+    const compName = target.getAttribute('data-component') || undefined;
+    const win = target.ownerDocument?.defaultView || window;
+
+    options.onSelectElement?.({
+      selector,
+      tagName: target.tagName.toLowerCase(),
+      textContent: target.textContent?.trim().slice(0, 100) || '',
+      componentName: compName,
+      computedStyles: {
+        color: win.getComputedStyle ? win.getComputedStyle(target).color : '',
+        backgroundColor: win.getComputedStyle ? win.getComputedStyle(target).backgroundColor : '',
+      },
+      rect,
+    });
+  };
+
+  doc.addEventListener('mouseover', handleMouseOver);
+  doc.addEventListener('mouseout', handleMouseOut);
+  doc.addEventListener('click', handleClick);
+
+  // Inject styles
+  let styleEl = doc.querySelector('style#dpa-studio-injected-styles');
+  if (!styleEl) {
+    styleEl = doc.createElement('style');
+    styleEl.id = 'dpa-studio-injected-styles';
+    (doc.head || doc.documentElement)?.appendChild(styleEl);
+  }
+  styleEl.textContent = `
+    * {
+      cursor: crosshair !important;
+    }
+    .dpa-hover-target {
+      outline: 2px dashed #0d99ff !important;
+      outline-offset: 1px !important;
+    }
+    ${options.maskAllText ? 'body * { user-select: none !important; }' : ''}
+  `;
+
+  return () => {
+    doc.removeEventListener('mouseover', handleMouseOver);
+    doc.removeEventListener('mouseout', handleMouseOut);
+    doc.removeEventListener('click', handleClick);
+  };
+}
+
 export interface SelectedElementData {
   selector: string;
   tagName: string;
@@ -102,78 +188,6 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
     return processDomSnapshot(initialDomSnapshot || '', maskAllText);
   }, [initialDomSnapshot, maskAllText]);
 
-  // Helper to attach inspector hover/click listeners
-  const attachInspector = (doc: Document) => {
-    let lastHovered: HTMLElement | null = null;
-    const handleMouseOver = (ev: MouseEvent) => {
-      const target = ev.target as HTMLElement;
-      if (!target || target === doc.body || target === doc.documentElement) return;
-      if (lastHovered && lastHovered !== target) {
-        lastHovered.classList.remove('dpa-hover-target');
-      }
-      target.classList.add('dpa-hover-target');
-      lastHovered = target;
-    };
-
-    const handleMouseOut = (ev: MouseEvent) => {
-      const target = ev.target as HTMLElement;
-      target?.classList?.remove('dpa-hover-target');
-    };
-
-    const handleClick = (ev: MouseEvent) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const target = ev.target as HTMLElement;
-      if (!target || target === doc.body || target === doc.documentElement) return;
-
-      const rect = target.getBoundingClientRect();
-      const selector = generateCssSelector(target);
-
-      const compName = target.getAttribute('data-component') || undefined;
-      const win = target.ownerDocument?.defaultView || window;
-
-      onSelectElement?.({
-        selector,
-        tagName: target.tagName.toLowerCase(),
-        textContent: target.textContent?.trim().slice(0, 100) || '',
-        componentName: compName,
-        computedStyles: {
-          color: win.getComputedStyle ? win.getComputedStyle(target).color : '',
-          backgroundColor: win.getComputedStyle ? win.getComputedStyle(target).backgroundColor : '',
-        },
-        rect,
-      });
-    };
-
-    doc.addEventListener('mouseover', handleMouseOver);
-    doc.addEventListener('mouseout', handleMouseOut);
-    doc.addEventListener('click', handleClick);
-
-    // Inject styles
-    let styleEl = doc.querySelector('style#dpa-studio-injected-styles');
-    if (!styleEl) {
-      styleEl = doc.createElement('style');
-      styleEl.id = 'dpa-studio-injected-styles';
-      (doc.head || doc.documentElement)?.appendChild(styleEl);
-    }
-    styleEl.textContent = `
-      * {
-        cursor: crosshair !important;
-      }
-      .dpa-hover-target {
-        outline: 2px dashed #0d99ff !important;
-        outline-offset: 1px !important;
-      }
-      ${maskAllText ? 'body * { user-select: none !important; }' : ''}
-    `;
-
-    return () => {
-      doc.removeEventListener('mouseover', handleMouseOver);
-      doc.removeEventListener('mouseout', handleMouseOut);
-      doc.removeEventListener('click', handleClick);
-    };
-  };
-
   // Replayer initialization
   useEffect(() => {
     if (!hasRrwebEvents || !containerRef.current) return;
@@ -213,10 +227,29 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
       const doc = replayer.iframe?.contentDocument || replayer.iframe?.contentWindow?.document;
       let cleanupInspector: (() => void) | undefined;
       if (doc) {
-        cleanupInspector = attachInspector(doc);
+        cleanupInspector = attachIframeListeners(doc, {
+          maskAllText,
+          onSelectElement,
+        });
       }
 
+      const handleReplayerLoad = () => {
+        const loadedDoc =
+          replayer.iframe?.contentDocument ||
+          replayer.iframe?.contentWindow?.document;
+        if (loadedDoc) {
+          cleanupInspector?.();
+          cleanupInspector = attachIframeListeners(loadedDoc, {
+            maskAllText,
+            onSelectElement,
+          });
+        }
+      };
+
+      replayer.iframe?.addEventListener('load', handleReplayerLoad);
+
       return () => {
+        replayer.iframe?.removeEventListener('load', handleReplayerLoad);
         cleanupInspector?.();
         try {
           replayer.destroy();
@@ -226,7 +259,7 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
     } catch (err) {
       console.warn('[DPA Studio] Failed to initialize rrweb Replayer:', err);
     }
-  }, [processedEvents, hasRrwebEvents]);
+  }, [processedEvents, hasRrwebEvents, maskAllText, onSelectElement]);
 
   // Synchronize play / pause / seek with Replayer
   const prevIsPlayingRef = useRef(isPlaying);
@@ -254,7 +287,9 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
   }, [isPlaying, currentTimeMs]);
 
   // Fallback: Synchronize static iframe document if no rrweb events
-  useEffect(() => {
+  const cleanupFallbackInspectorRef = useRef<(() => void) | null>(null);
+
+  const applyIframeListeners = useCallback(() => {
     if (hasRrwebEvents) return;
     const iframe = fallbackIframeRef.current;
     if (!iframe || !initialDomSnapshot) return;
@@ -263,12 +298,44 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!doc) return;
 
+      // Synchronize DOM structure with processedSnapshot
       doc.documentElement.innerHTML = processedSnapshot;
-      return attachInspector(doc);
+
+      if (cleanupFallbackInspectorRef.current) {
+        cleanupFallbackInspectorRef.current();
+        cleanupFallbackInspectorRef.current = null;
+      }
+
+      const cleanup = attachIframeListeners(doc, {
+        maskAllText,
+        onSelectElement,
+      });
+      cleanupFallbackInspectorRef.current = cleanup || null;
     } catch {
       // ignore
     }
-  }, [hasRrwebEvents, processedSnapshot, initialDomSnapshot, artboardHeight]);
+  }, [hasRrwebEvents, initialDomSnapshot, processedSnapshot, maskAllText, onSelectElement]);
+
+  useEffect(() => {
+    if (hasRrwebEvents) return;
+    const iframe = fallbackIframeRef.current;
+    if (!iframe || !initialDomSnapshot) return;
+
+    const handleLoad = () => {
+      applyIframeListeners();
+    };
+
+    iframe.addEventListener('load', handleLoad);
+    applyIframeListeners();
+
+    return () => {
+      iframe.removeEventListener('load', handleLoad);
+      if (cleanupFallbackInspectorRef.current) {
+        cleanupFallbackInspectorRef.current();
+        cleanupFallbackInspectorRef.current = null;
+      }
+    };
+  }, [hasRrwebEvents, initialDomSnapshot, applyIframeListeners]);
 
   if (hasRrwebEvents) {
     return (
@@ -293,6 +360,7 @@ export const ReplayViewer: React.FC<ReplayViewerProps> = ({
           srcDoc={processedSnapshot}
           sandbox="allow-same-origin allow-scripts"
           data-testid="studio-replayed-iframe"
+          onLoad={applyIframeListeners}
         />
       </div>
     );
