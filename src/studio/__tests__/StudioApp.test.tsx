@@ -140,6 +140,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
       vi.advanceTimersByTime(200);
     });
 
+    // Check time updated
     expect(timeDisplay?.textContent).toContain('00:00.200');
 
     // Click pause
@@ -285,5 +286,165 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
 
     expect(container.querySelector('[data-testid="studio-empty-snapshot"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="studio-replayed-iframe"]')).toBeNull();
+  });
+
+  it('supports collapsible panels to avoid overlapping replay stage (Issue 3)', async () => {
+    await renderComponent();
+
+    const leftPanel = container.querySelector('[data-testid="studio-left-panel"]');
+    const rightPanel = container.querySelector('[data-testid="studio-right-panel"]');
+
+    expect(leftPanel?.classList.contains('w-64')).toBe(true);
+    expect(rightPanel?.classList.contains('w-64')).toBe(true);
+
+    // Collapse left panel via collapse button
+    const leftCollapseBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-left-panel-collapse-btn"]'
+    );
+    expect(leftCollapseBtn).not.toBeNull();
+    await act(async () => {
+      leftCollapseBtn?.click();
+    });
+
+    expect(leftPanel?.classList.contains('w-0')).toBe(true);
+    // Expand tab should appear
+    const leftExpandTab = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-left-panel-open-tab"]'
+    );
+    expect(leftExpandTab).not.toBeNull();
+
+    // Re-expand left panel via expand tab
+    await act(async () => {
+      leftExpandTab?.click();
+    });
+    expect(leftPanel?.classList.contains('w-64')).toBe(true);
+
+    // Collapse right panel via top header toggle
+    const rightToggleBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="studio-right-panel-toggle"]'
+    );
+    expect(rightToggleBtn).not.toBeNull();
+    await act(async () => {
+      rightToggleBtn?.click();
+    });
+
+    expect(rightPanel?.classList.contains('w-0')).toBe(true);
+
+    // Re-expand right panel via right toggle button
+    await act(async () => {
+      rightToggleBtn?.click();
+    });
+    expect(rightPanel?.classList.contains('w-64')).toBe(true);
+  });
+
+  it('calculates responsive scale for the artboard stage (Issue 2)', async () => {
+    await renderComponent();
+
+    const stageWrapper = container.querySelector<HTMLElement>(
+      '[data-testid="studio-stage-wrapper"]'
+    );
+    expect(stageWrapper).not.toBeNull();
+    expect(stageWrapper?.style.transform).toContain('scale(');
+  });
+
+  it('renders localized Japanese labels unified with main page (Issue 7)', async () => {
+    await renderComponent();
+
+    const leftPanel = container.querySelector('[data-testid="studio-left-panel"]');
+    expect(leftPanel?.textContent).toContain('指示一覧');
+    expect(leftPanel?.textContent).toContain('前提コンテキスト');
+
+    const rightPanel = container.querySelector('[data-testid="studio-right-panel"]');
+    expect(rightPanel?.textContent).toContain('要素詳細');
+    expect(rightPanel?.textContent).toContain('フレーム寸法');
+  });
+
+  it('renders timeline time display with whitespace-nowrap and starts at 00:00.000 (Issue 8)', async () => {
+    await renderComponent();
+
+    const timeDisplay = container.querySelector('[data-testid="timeline-time-display"]');
+    expect(timeDisplay).not.toBeNull();
+    expect(timeDisplay?.classList.contains('whitespace-nowrap')).toBe(true);
+    expect(timeDisplay?.classList.contains('shrink-0')).toBe(true);
+    expect(timeDisplay?.textContent).toContain('00:00.000');
+  });
+
+  it('initializes artboard dimensions matching SAMPLE_SESSION viewport 393×852 (Issue 6)', async () => {
+    await renderComponent();
+
+    const artboard = container.querySelector<HTMLElement>('[data-testid="studio-artboard"]');
+    expect(artboard).not.toBeNull();
+    expect(artboard?.style.width).toBe('393px');
+    expect(artboard?.style.height).toBe('852px');
+
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="studio-device-select"]');
+    expect(select?.value).toBe('iphone-15-pro');
+  });
+
+  it('updates both artboard width AND height when switching device presets (Issue 6)', async () => {
+    await renderComponent();
+
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="studio-device-select"]');
+    expect(select).not.toBeNull();
+
+    // Select iPhone SE (375 × 667)
+    await act(async () => {
+      select!.value = 'iphone-se';
+      select!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const artboard = container.querySelector<HTMLElement>('[data-testid="studio-artboard"]');
+    expect(artboard?.style.width).toBe('375px');
+    expect(artboard?.style.height).toBe('667px'); // Must NOT be hardcoded 680px!
+
+    const rightPanel = container.querySelector('[data-testid="studio-right-panel"]');
+    expect(rightPanel?.textContent).toContain('375');
+    expect(rightPanel?.textContent).toContain('667');
+
+    // Select iPad Mini (768 × 1024)
+    await act(async () => {
+      select!.value = 'ipad-mini';
+      select!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(artboard?.style.width).toBe('768px');
+    expect(artboard?.style.height).toBe('1024px');
+  });
+
+  it('synchronizes artboard dimensions and matching preset when loading session from runtime (Issue 6)', async () => {
+    delete (window as any).location;
+    window.location = new URL('https://example.com/studio.html?sessionId=ipad-session') as any;
+
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: vi.fn((msg: any, cb: any) => {
+          if (msg.type === 'GET_RECORDING_SESSION') {
+            cb({
+              ok: true,
+              session: {
+                sessionId: 'ipad-session',
+                url: 'https://example.com/app',
+                title: 'iPad Session',
+                createdAt: new Date().toISOString(),
+                durationMs: 4000,
+                viewport: { width: 768, height: 1024 },
+                initialDomSnapshot: '<div>iPad content</div>',
+                annotations: [],
+                actionLogs: [],
+              },
+            });
+          }
+        }),
+      },
+    };
+
+    await renderComponent();
+
+    const artboard = container.querySelector<HTMLElement>('[data-testid="studio-artboard"]');
+    expect(artboard?.style.width).toBe('768px');
+    expect(artboard?.style.height).toBe('1024px');
+
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="studio-device-select"]');
+    expect(select?.value).toBe('ipad-mini');
   });
 });

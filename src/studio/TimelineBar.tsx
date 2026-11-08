@@ -37,7 +37,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
 
   return (
     <footer
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 h-12 bg-[#2c2c2c] border border-white/10 rounded-[14px] px-3 flex items-center gap-3 z-40 shadow-2xl backdrop-blur-md select-none text-white"
+      className="absolute bottom-4 left-1/2 -translate-x-1/2 h-12 bg-[#2c2c2c] border border-white/10 rounded-[14px] px-3 flex items-center gap-3 z-40 shadow-2xl backdrop-blur-md select-none text-white max-w-[calc(100%-24px)]"
       data-testid="studio-timeline-bar"
     >
       {/* 1. Step Backward (-1s) */}
@@ -80,9 +80,9 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
       <div className="h-4 w-px bg-white/10" />
 
       {/* 4. Time Display & Scrubber Track */}
-      <div className="flex items-center gap-2.5 w-72 sm:w-80 md:w-96">
+      <div className="flex items-center gap-2.5 flex-1 min-w-0 max-w-sm sm:max-w-md md:max-w-lg">
         <span
-          className="font-mono text-[11px] text-white w-32 shrink-0 text-center"
+          className="font-mono text-[11px] text-white shrink-0 text-center whitespace-nowrap min-w-[130px]"
           data-testid="timeline-time-display"
         >
           {formatTimestampOffset(clampedCurrent)} / {formatTimestampOffset(safeDuration)}

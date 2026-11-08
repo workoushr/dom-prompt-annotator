@@ -12,6 +12,7 @@ import {
   Monitor,
   Maximize2,
   FileCode2,
+  X,
 } from 'lucide-react';
 import {
   DEVICE_PRESETS,
@@ -35,6 +36,8 @@ export interface FloatingBottomBarProps {
   isRecording?: boolean;
   recordingDurationMs?: number;
   onToggleRecording?: () => void;
+  onClose?: () => void;
+  onShowToast?: (message: string) => void;
 }
 
 export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
@@ -53,6 +56,8 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   isRecording = false,
   recordingDurationMs = 0,
   onToggleRecording,
+  onClose,
+  onShowToast,
 }) => {
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [copyFormatMenuOpen, setCopyFormatMenuOpen] = useState(false);
@@ -106,6 +111,12 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
     e.stopPropagation();
     const nextOrientation =
       emulationConfig.orientation === 'landscape' ? 'portrait' : 'landscape';
+    const orientLabel = nextOrientation === 'landscape' ? '横向き' : '縦向き';
+    const swappedWidth = emulationConfig.height;
+    const swappedHeight = emulationConfig.width;
+    onShowToast?.(
+      `🔄 ${emulationConfig.name} (${orientLabel}: ${swappedWidth}×${swappedHeight}) に回転しました`
+    );
     await onSetDeviceEmulation({
       orientation: nextOrientation,
     });
@@ -125,7 +136,6 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         />
         <span className="dpa-minimized-label" data-testid="dpa-mode-pill">
           🎯 DPA ({annotationCount}件)
-          {inspectMode && ' [Selection Mode]'}
         </span>
         <button
           type="button"
@@ -135,6 +145,19 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         >
           <Maximize2 className="dpa-icon-xs" />
           <span>展開 ↗</span>
+        </button>
+        <button
+          type="button"
+          className="dpa-minimized-close-btn"
+          data-testid="dpa-minimized-close-btn"
+          aria-label="閉じる"
+          title="DPAを閉じる"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose?.();
+          }}
+        >
+          <X className="dpa-icon-xs" />
         </button>
       </div>
     );
@@ -182,7 +205,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         >
           <MousePointerClick className="dpa-icon-sm" />
           <span className="dpa-btn-text">
-            {inspectMode ? '選択中 (Selection Mode)' : '選択 (Alt+S)'}
+            {inspectMode ? '選択中' : '選択'}
           </span>
           <span
             className={`dpa-status-dot ${
@@ -207,6 +230,20 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         >
           {getDeviceIcon()}
           <span className="dpa-btn-device-label">{currentDeviceLabel}</span>
+          {emulationConfig.enabled && (
+            <>
+              <span
+                className="dpa-status-dot dpa-status-dot--active"
+                data-testid="dpa-device-active-dot"
+              />
+              <span
+                className="dpa-device-badge"
+                data-testid="dpa-device-active-badge"
+              >
+                ON
+              </span>
+            </>
+          )}
           <ChevronUp
             className={`dpa-icon-xs dpa-chevron ${
               deviceMenuOpen ? 'dpa-chevron--open' : ''
@@ -223,8 +260,8 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
             onClick={handleToggleOrientation}
             title={`画面回転 (${
               emulationConfig.orientation === 'landscape'
-                ? '横向き (Landscape)'
-                : '縦向き (Portrait)'
+                ? '横向き'
+                : '縦向き'
             })`}
           >
             <RotateCw className="dpa-icon-xs" />
@@ -234,7 +271,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         {/* Device Presets Flyout Menu */}
         {deviceMenuOpen && (
           <div className="dpa-device-menu" data-testid="dpa-device-menu">
-            <div className="dpa-menu-header">デバイスサイズ (CDP Viewport)</div>
+            <div className="dpa-menu-header">デバイスサイズ</div>
             <div className="dpa-menu-items">
               {DEVICE_PRESETS.map((preset) => {
                 const isSelected =
@@ -267,7 +304,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
                 data-testid="dpa-device-reset"
                 onClick={() => void handleResetDesktop()}
               >
-                <span>Desktop (実寸リセット)</span>
+                <span>デスクトップ (実寸リセット)</span>
                 {!emulationConfig.enabled && (
                   <Check className="dpa-icon-xs dpa-text-blue" />
                 )}
@@ -282,12 +319,12 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
                 <div className="dpa-flex-between">
                   <span className="dpa-flex-center gap-1">
                     <RotateCw className="dpa-icon-xs" />
-                    <span>縦横回転 (Orientation)</span>
+                    <span>縦横回転</span>
                   </span>
                   <span className="dpa-menu-item-dim">
                     {emulationConfig.orientation === 'landscape'
-                      ? 'Landscape'
-                      : 'Portrait'}
+                      ? '横向き'
+                      : '縦向き'}
                   </span>
                 </div>
               </button>
@@ -426,6 +463,18 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         aria-label="最小化"
       >
         <Minus className="dpa-icon-sm" />
+      </button>
+
+      {/* 7. [×] 閉じるボタン */}
+      <button
+        type="button"
+        className="dpa-btn dpa-btn-close"
+        data-testid="dpa-bottom-bar-close-btn"
+        onClick={onClose}
+        title="DPAを閉じる"
+        aria-label="閉じる"
+      >
+        <X className="dpa-icon-sm" />
       </button>
     </div>
   );

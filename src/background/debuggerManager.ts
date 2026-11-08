@@ -35,6 +35,21 @@ export function getDeviceEmulationState(tabId: number): DeviceEmulationConfig {
 }
 
 /**
+ * Converts CDP debugger error messages to user-friendly messages.
+ */
+export function formatDebuggerError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (
+    /another debugger/i.test(msg) ||
+    /already attached/i.test(msg) ||
+    /attached to this target/i.test(msg)
+  ) {
+    return '既にDevToolsまたは別のデバッガーが開いているため接続できません。DevToolsを閉じて再試行してください。';
+  }
+  return msg || 'CDP接続に失敗しました';
+}
+
+/**
  * Applies device metrics and touch emulation override via Chrome DevTools Protocol (CDP).
  */
 export async function attachAndEmulateDevice(
@@ -68,8 +83,8 @@ export async function attachAndEmulateDevice(
   };
 
   // Adjust width and height based on orientation
-  let targetWidth = mergedConfig.width;
-  let targetHeight = mergedConfig.height;
+  let targetWidth = Math.max(1, Math.round(Number(mergedConfig.width) || 375));
+  let targetHeight = Math.max(1, Math.round(Number(mergedConfig.height) || 667));
   if (mergedConfig.orientation === 'landscape' && targetWidth < targetHeight) {
     [targetWidth, targetHeight] = [targetHeight, targetWidth];
   } else if (
@@ -99,6 +114,8 @@ export async function attachAndEmulateDevice(
             height: targetHeight,
             deviceScaleFactor: mergedConfig.deviceScaleFactor || 1,
             mobile: Boolean(mergedConfig.mobile),
+            scale: 1,
+            dontSetVisibleSize: false,
             screenOrientation: {
               angle: mergedConfig.orientation === 'landscape' ? 90 : 0,
               type:
@@ -129,7 +146,9 @@ export async function attachAndEmulateDevice(
           // Ignore detach error during rollback
         }
       }
-      throw error;
+      const friendlyMessage = formatDebuggerError(error);
+      const enhancedError = new Error(friendlyMessage);
+      throw enhancedError;
     }
   } else {
     // In environments without chrome.debugger (e.g., node / unit test fallback)

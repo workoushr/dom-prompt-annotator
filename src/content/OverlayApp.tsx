@@ -129,25 +129,69 @@ function safeBroadcastPageState(state: PageAnnotationState): void {
   }
 }
 
-function computePopoverPosition(rect: ElementRect): { top: number; left: number } {
+export function computePopoverPosition(
+  rect: ElementRect,
+  viewport?: { width?: number; height?: number },
+  bottomBarHeight = 72
+): { top: number; left: number } {
   const popoverWidth = 340;
   const popoverHeight = 290;
   const margin = 12;
 
-  const vw = typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : 1024;
-  const vh = typeof window !== 'undefined' && window.innerHeight > 0 ? window.innerHeight : 768;
+  const vw =
+    viewport?.width ??
+    (typeof window !== 'undefined' && window.innerWidth > 0
+      ? window.innerWidth
+      : 1024);
+  const vh =
+    viewport?.height ??
+    (typeof window !== 'undefined' && window.innerHeight > 0
+      ? window.innerHeight
+      : 768);
 
+  const bottomLimit = vh - bottomBarHeight;
+
+  // Initial candidate: below the element
   let top = rect.y + rect.height + 8;
-  if (top + popoverHeight > vh - margin) {
+  let left = rect.x;
+
+  // If placing below exceeds the bottom limit (colliding with bottom bar or screen bottom)
+  if (top + popoverHeight > bottomLimit) {
     const aboveTop = rect.y - popoverHeight - 8;
     if (aboveTop >= margin) {
       top = aboveTop;
     } else {
-      top = Math.max(margin, Math.min(top, vh - popoverHeight - margin));
+      // If neither purely above nor purely below has full clearance:
+      // Try side placement if there's enough horizontal room
+      const spaceRight = vw - margin - (rect.x + rect.width + 8);
+      const spaceLeft = rect.x - 8 - margin;
+
+      if (spaceRight >= popoverWidth) {
+        left = rect.x + rect.width + 8;
+        top = Math.max(margin, Math.min(rect.y, bottomLimit - popoverHeight));
+      } else if (spaceLeft >= popoverWidth) {
+        left = rect.x - 8 - popoverWidth;
+        top = Math.max(margin, Math.min(rect.y, bottomLimit - popoverHeight));
+      } else {
+        // Fallback: pick the vertical side with more room and clamp above bottom bar
+        const spaceAbove = rect.y - margin;
+        const spaceBelow = bottomLimit - (rect.y + rect.height);
+
+        if (spaceAbove >= spaceBelow) {
+          top = Math.max(margin, rect.y - popoverHeight - 8);
+        } else {
+          top = Math.max(margin, Math.min(top, bottomLimit - popoverHeight));
+        }
+      }
     }
   }
 
-  let left = rect.x;
+  // Ensure top doesn't overlap bottom bar even after clamping, if possible
+  if (bottomLimit - popoverHeight >= margin && top + popoverHeight > bottomLimit) {
+    top = bottomLimit - popoverHeight;
+  }
+
+  // Clamp left inside viewport margins
   if (left + popoverWidth > vw - margin) {
     left = vw - popoverWidth - margin;
   }
@@ -177,6 +221,27 @@ export const OverlayApp: React.FC = () => {
   );
   const [isCopied, setIsCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
+  const showToast = useCallback((msg: string, duration = 3000) => {
+    if (toastTimeoutRef.current !== null) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(msg);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimeoutRef.current = null;
+    }, duration);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDurationMs, setRecordingDurationMs] = useState(0);
 
@@ -188,6 +253,9 @@ export const OverlayApp: React.FC = () => {
 
   const popoverRef = useRef<PopoverState | null>(popover);
   popoverRef.current = popover;
+
+  const isDrawerOpenRef = useRef<boolean>(isDrawerOpen);
+  isDrawerOpenRef.current = isDrawerOpen;
 
   // Initialize recording controller
   useEffect(() => {
@@ -230,6 +298,35 @@ export const OverlayApp: React.FC = () => {
       mounted = false;
     };
   }, []);
+
+  // Issue 5: Dynamically manage document.body.style.paddingBottom
+  // When the bottom bar is open (isVisible && !isMinimized), add padding to prevent
+  // page footer/content from being obscured. Restore original padding on minimize, close, or unmount.
+  const originalPaddingBottomRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.body) {
+      return;
+    }
+
+    if (originalPaddingBottomRef.current === null) {
+      originalPaddingBottomRef.current = document.body.style.paddingBottom || '';
+    }
+
+    const isBarActive = (state.isVisible !== false) && !isMinimized;
+
+    if (isBarActive) {
+      document.body.style.paddingBottom = '72px';
+    } else {
+      document.body.style.paddingBottom = originalPaddingBottomRef.current;
+    }
+
+    return () => {
+      if (originalPaddingBottomRef.current !== null) {
+        document.body.style.paddingBottom = originalPaddingBottomRef.current;
+      }
+    };
+  }, [state.isVisible, isMinimized]);
 
   // Auto-focus instruction textarea when popover opens
   useEffect(() => {
@@ -291,7 +388,20 @@ export const OverlayApp: React.FC = () => {
       setHoveredInfo(null);
       setPopover(null);
     }
-    await updateAndPersistState({ inspectMode: nextInspect });
+    await updateAndPersistState({
+      inspectMode: nextInspect,
+      isVisible: true,
+    });
+  }, [updateAndPersistState]);
+
+  const handleCloseOverlay = useCallback(async () => {
+    setHoveredInfo(null);
+    setPopover(null);
+    setIsDrawerOpen(false);
+    await updateAndPersistState({
+      isVisible: false,
+      inspectMode: false,
+    });
   }, [updateAndPersistState]);
 
   const selectPopoverElement = useCallback((nextEl: HTMLElement) => {
@@ -432,27 +542,76 @@ export const OverlayApp: React.FC = () => {
 
   const handleSetDeviceEmulation = useCallback(
     async (config: Partial<DeviceEmulationConfig>) => {
+      const isRotation = Boolean(
+        config.orientation &&
+        config.orientation !== emulationConfig.orientation &&
+        !config.presetId
+      );
+
       if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
         try {
           const res = (await chrome.runtime.sendMessage({
             type: 'SET_DEVICE_EMULATION',
             config,
-          })) as { ok?: boolean; config?: DeviceEmulationConfig } | undefined;
+          })) as { ok?: boolean; config?: DeviceEmulationConfig; error?: string } | undefined;
+
           if (res?.ok && res.config) {
             setEmulationConfig(res.config);
+            if (isRotation) {
+              const orientLabel =
+                res.config.orientation === 'landscape' ? '横向き' : '縦向き';
+              showToast(
+                `🔄 ${res.config.name} (${orientLabel}: ${res.config.width}×${res.config.height}) に回転しました`
+              );
+            } else {
+              showToast(
+                `📱 ${res.config.name} (${res.config.width}×${res.config.height}) を適用しました`
+              );
+            }
+            return;
+          } else {
+            const errorMsg =
+              res?.error || 'DevToolsが開いているか、CDP接続に失敗しました';
+            showToast(`⚠️ デバイスエミュレーション失敗: ${errorMsg}`, 4000);
             return;
           }
-        } catch {
-          // Fallback for tests or disconnected runtime
+        } catch (err: unknown) {
+          const errorMsg =
+            err instanceof Error
+              ? err.message
+              : 'DevToolsが開いているか、CDP接続に失敗しました';
+          showToast(`⚠️ デバイスエミュレーション失敗: ${errorMsg}`, 4000);
+          return;
         }
       }
-      setEmulationConfig((prev) => ({
-        ...prev,
+
+      // Fallback for tests or disconnected runtime
+      let targetWidth = config.width || emulationConfig.width;
+      let targetHeight = config.height || emulationConfig.height;
+      if (isRotation) {
+        [targetWidth, targetHeight] = [targetHeight, targetWidth];
+      }
+      const fallbackConfig: DeviceEmulationConfig = {
+        ...emulationConfig,
         ...config,
+        width: targetWidth,
+        height: targetHeight,
         enabled: true,
-      }));
+      };
+      setEmulationConfig(fallbackConfig);
+      if (isRotation) {
+        const orientLabel =
+          fallbackConfig.orientation === 'landscape' ? '横向き' : '縦向き';
+        showToast(
+          `🔄 ${fallbackConfig.name} (${orientLabel}: ${fallbackConfig.width}×${fallbackConfig.height}) に回転しました`
+        );
+      } else {
+        showToast(
+          `📱 ${fallbackConfig.name} (${fallbackConfig.width}×${fallbackConfig.height}) を適用しました`
+        );
+      }
     },
-    []
+    [emulationConfig, showToast]
   );
 
   const handleClearDeviceEmulation = useCallback(async () => {
@@ -466,7 +625,8 @@ export const OverlayApp: React.FC = () => {
       }
     }
     setEmulationConfig({ ...DEFAULT_DEVICE_EMULATION_CONFIG, enabled: false });
-  }, []);
+    showToast('🖥️ デスクトップ表示にリセットしました');
+  }, [showToast]);
 
   const handleCopyPrompt = useCallback(
     async (format: 'markdown' | 'json' = 'markdown') => {
@@ -589,7 +749,7 @@ export const OverlayApp: React.FC = () => {
   // Mousemove & Click capture listeners for inspectMode
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
-      if (!stateRef.current.inspectMode) {
+      if (!stateRef.current.isVisible || !stateRef.current.inspectMode) {
         return;
       }
       if (isEventFromOverlay(event)) {
@@ -635,7 +795,7 @@ export const OverlayApp: React.FC = () => {
     };
 
     const handleClickCapture = (event: MouseEvent) => {
-      if (!stateRef.current.inspectMode) {
+      if (!stateRef.current.isVisible || !stateRef.current.inspectMode) {
         return;
       }
       if (isEventFromOverlay(event)) {
@@ -697,7 +857,16 @@ export const OverlayApp: React.FC = () => {
       ) {
         event.preventDefault();
         event.stopPropagation();
-        void handleToggleInspectMode();
+        if (!stateRef.current.isVisible) {
+          void updateAndPersistState({ isVisible: true, inspectMode: true });
+        } else {
+          void handleToggleInspectMode();
+        }
+        return;
+      }
+
+      // If overlay is not visible, don't handle any other keyboard shortcuts
+      if (!stateRef.current.isVisible) {
         return;
       }
 
@@ -721,11 +890,20 @@ export const OverlayApp: React.FC = () => {
           setPopover(null);
           return;
         }
-      } else if (event.key === 'Escape' && stateRef.current.inspectMode) {
+      } else if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
-        setHoveredInfo(null);
-        void updateAndPersistState({ inspectMode: false });
+        if (isDrawerOpenRef.current) {
+          setIsDrawerOpen(false);
+          return;
+        }
+        if (stateRef.current.inspectMode) {
+          setHoveredInfo(null);
+          void updateAndPersistState({ inspectMode: false });
+          return;
+        }
+        void handleCloseOverlay();
+        return;
       }
     };
 
@@ -734,6 +912,7 @@ export const OverlayApp: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [
+    handleCloseOverlay,
     handleStepChild,
     handleStepParent,
     handleToggleInspectMode,
@@ -847,9 +1026,13 @@ export const OverlayApp: React.FC = () => {
         }
 
         case 'SET_INSPECT_MODE': {
-          void savePageState(message.url || currentUrl, {
+          const patch: Parameters<typeof savePageState>[1] = {
             inspectMode: message.enabled,
-          }).then((updated) => {
+          };
+          if (message.enabled) {
+            patch.isVisible = true;
+          }
+          void savePageState(message.url || currentUrl, patch).then((updated) => {
             setState(updated);
             if (!message.enabled) {
               setPopover(null);
@@ -857,6 +1040,49 @@ export const OverlayApp: React.FC = () => {
             } else {
               setIsMinimized(false);
             }
+            sendResponse(updated);
+          });
+          return true;
+        }
+
+        case 'TOGGLE_OVERLAY': {
+          const nextVisible =
+            typeof message.visible === 'boolean'
+              ? message.visible
+              : !stateRef.current.isVisible;
+          const patch: Parameters<typeof savePageState>[1] = {
+            isVisible: nextVisible,
+          };
+          if (!nextVisible) {
+            patch.inspectMode = false;
+            setPopover(null);
+            setHoveredInfo(null);
+            setIsDrawerOpen(false);
+          } else {
+            patch.inspectMode = true;
+            setIsMinimized(false);
+          }
+          void savePageState(message.url || currentUrl, patch).then((updated) => {
+            setState(updated);
+            sendResponse(updated);
+          });
+          return true;
+        }
+
+        case 'SET_OVERLAY_VISIBLE': {
+          const patch: Parameters<typeof savePageState>[1] = {
+            isVisible: message.visible,
+          };
+          if (!message.visible) {
+            patch.inspectMode = false;
+            setPopover(null);
+            setHoveredInfo(null);
+            setIsDrawerOpen(false);
+          } else {
+            setIsMinimized(false);
+          }
+          void savePageState(message.url || currentUrl, patch).then((updated) => {
+            setState(updated);
             sendResponse(updated);
           });
           return true;
@@ -1143,7 +1369,11 @@ export const OverlayApp: React.FC = () => {
     : null;
 
   const popoverPosition = popover
-    ? computePopoverPosition(popover.metadata.rect)
+    ? computePopoverPosition(
+        popover.metadata.rect,
+        undefined,
+        isMinimized ? 54 : 72
+      )
     : null;
 
   const maskColor = state.maskingConfig.maskColor || '#FF00FF';
@@ -1154,6 +1384,10 @@ export const OverlayApp: React.FC = () => {
     maskColor,
     0.36
   )} 8px, ${hexToRgba(maskColor, 0.36)} 16px)`;
+
+  if (state.isVisible === false) {
+    return null;
+  }
 
   return (
     <div
@@ -1491,12 +1725,15 @@ export const OverlayApp: React.FC = () => {
         isRecording={isRecording}
         recordingDurationMs={recordingDurationMs}
         onToggleRecording={handleToggleRecording}
+        onClose={handleCloseOverlay}
       />
 
       {/* Floating Toast Notification */}
       {toastMessage && (
         <div className="dpa-toast-alert" data-testid="dpa-toast-alert">
-          <span className="dpa-icon-check">✓</span>
+          {!/^[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u.test(toastMessage) && (
+            <span className="dpa-icon-check">✓</span>
+          )}
           <span>{toastMessage}</span>
         </div>
       )}

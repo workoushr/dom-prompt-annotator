@@ -27,7 +27,7 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
 
   describe('maskRrwebEvents', () => {
     it('masks full snapshot text nodes and incremental text mutations', () => {
-      const sampleEvents = [
+      const sampleEvents: any[] = [
         {
           type: 4, // Meta
           data: { href: 'https://example.com' },
@@ -92,7 +92,7 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
       expect(masked[3].data.adds[0].node.attributes.title).toBe('[MASKED]');
       expect(masked[3].data.adds[0].node.attributes['aria-label']).toBe('[MASKED]');
       // Original events should not be mutated
-      expect(sampleEvents[1].data.node.childNodes[0].textContent).toBe(
+      expect(sampleEvents[1]!.data.node.childNodes[0].textContent).toBe(
         'Sensitive Account Balance $1,000,000'
       );
     });
@@ -124,7 +124,7 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
         '[data-testid="studio-replayed-iframe"]'
       );
       expect(iframe).not.toBeNull();
-      const srcDoc = iframe?.getAttribute('srcdoc') || iframe?.srcDoc || '';
+      const srcDoc = iframe?.getAttribute('srcdoc') || (iframe as any)?.srcDoc || '';
       expect(srcDoc).toContain('Hello World');
     });
 
@@ -148,7 +148,7 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
         '[data-testid="studio-replayed-iframe"]'
       );
       expect(iframe).not.toBeNull();
-      const srcDoc = iframe?.getAttribute('srcdoc') || iframe?.srcDoc || '';
+      const srcDoc = iframe?.getAttribute('srcdoc') || (iframe as any)?.srcDoc || '';
       expect(srcDoc).toContain('[MASKED]');
       expect(srcDoc).not.toContain('Super Secret');
     });
