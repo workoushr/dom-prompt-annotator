@@ -115,6 +115,15 @@ export function initContentScript(): void {
     return;
   }
 
+  // Do not initialize DPA overlay inside nested iframes (e.g. device emulation preview)
+  try {
+    if (window.top !== window.self) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
   const win = window as unknown as Record<string, boolean>;
   if (win.__DOM_PROMPT_ANNOTATOR_INITIALIZED__) {
     return;

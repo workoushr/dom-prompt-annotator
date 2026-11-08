@@ -16,10 +16,18 @@ export function resetDebuggerManagerForTests(): void {
 }
 
 /**
- * Checks if debugger is currently attached to the tab according to internal tracking.
+ * Checks if device emulation is active for the tab.
+ * Retained for backwards compatibility with test harnesses and consumers.
  */
 export function isDebuggerAttached(tabId: number): boolean {
-  return attachedTabs.has(tabId);
+  return attachedTabs.has(tabId) || Boolean(emulationStates.get(tabId)?.enabled);
+}
+
+/**
+ * Checks if device emulation is currently active for the tab.
+ */
+export function isDeviceEmulationActive(tabId: number): boolean {
+  return Boolean(emulationStates.get(tabId)?.enabled);
 }
 
 /**
@@ -35,7 +43,8 @@ export function getDeviceEmulationState(tabId: number): DeviceEmulationConfig {
 }
 
 /**
- * Applies device metrics and touch emulation override via Chrome DevTools Protocol (CDP).
+ * Updates device emulation configuration for the tab and notifies the content script.
+ * Replaces CDP Emulation.setDeviceMetricsOverride with safe iframe emulation state management.
  */
 export async function attachAndEmulateDevice(
   tabId: number,
@@ -81,61 +90,7 @@ export async function attachAndEmulateDevice(
   mergedConfig.width = targetWidth;
   mergedConfig.height = targetHeight;
 
-  // Attach debugger if not already attached
-  if (typeof chrome !== 'undefined' && chrome.debugger) {
-    try {
-      if (!attachedTabs.has(tabId) && chrome.debugger.attach) {
-        await chrome.debugger.attach({ tabId }, '1.3');
-        attachedTabs.add(tabId);
-      }
-
-      if (chrome.debugger.sendCommand) {
-        // Override device metrics
-        await chrome.debugger.sendCommand(
-          { tabId },
-          'Emulation.setDeviceMetricsOverride',
-          {
-            width: targetWidth,
-            height: targetHeight,
-            deviceScaleFactor: mergedConfig.deviceScaleFactor || 1,
-            mobile: Boolean(mergedConfig.mobile),
-            screenOrientation: {
-              angle: mergedConfig.orientation === 'landscape' ? 90 : 0,
-              type:
-                mergedConfig.orientation === 'landscape'
-                  ? 'landscapePrimary'
-                  : 'portraitPrimary',
-            },
-          }
-        );
-
-        // Emulate touch events
-        await chrome.debugger.sendCommand(
-          { tabId },
-          'Emulation.setTouchEmulationEnabled',
-          {
-            enabled: Boolean(mergedConfig.touch),
-            maxTouchPoints: mergedConfig.touch ? 5 : 1,
-          }
-        );
-      }
-    } catch (error) {
-      // Rollback: detach and remove from attachedTabs if attach or sendCommand failed
-      attachedTabs.delete(tabId);
-      if (chrome.debugger.detach) {
-        try {
-          await chrome.debugger.detach({ tabId });
-        } catch {
-          // Ignore detach error during rollback
-        }
-      }
-      throw error;
-    }
-  } else {
-    // In environments without chrome.debugger (e.g., node / unit test fallback)
-    attachedTabs.add(tabId);
-  }
-
+  attachedTabs.add(tabId);
   emulationStates.set(tabId, mergedConfig);
 
   // Notify Content Script / UI of update
@@ -155,35 +110,9 @@ export async function attachAndEmulateDevice(
 }
 
 /**
- * Clears device emulation and detaches CDP debugger from the specified tab.
+ * Clears device emulation configuration and notifies the content script to restore normal view.
  */
 export async function clearDeviceEmulation(tabId: number): Promise<void> {
-  if (typeof chrome !== 'undefined' && chrome.debugger) {
-    if (chrome.debugger.sendCommand) {
-      try {
-        await chrome.debugger.sendCommand(
-          { tabId },
-          'Emulation.clearDeviceMetricsOverride'
-        );
-        await chrome.debugger.sendCommand(
-          { tabId },
-          'Emulation.setTouchEmulationEnabled',
-          { enabled: false }
-        );
-      } catch {
-        // Tab or debugger might already be disconnected
-      }
-    }
-
-    if (attachedTabs.has(tabId) && chrome.debugger.detach) {
-      try {
-        await chrome.debugger.detach({ tabId });
-      } catch {
-        // Tab or debugger might already be detached
-      }
-    }
-  }
-
   attachedTabs.delete(tabId);
 
   const clearedConfig: DeviceEmulationConfig = {
@@ -208,11 +137,11 @@ export async function clearDeviceEmulation(tabId: number): Promise<void> {
 }
 
 /**
- * Handler for chrome.debugger.onDetach event.
- * Triggered when user cancels debugging via Chrome's warning bar or tab closes.
+ * Handler for detach or tab closing events.
+ * Triggered when tab closes or emulation is disconnected.
  */
 export async function handleDebuggerDetach(
-  source: chrome.debugger.Debuggee,
+  source: { tabId?: number },
   reason: string
 ): Promise<void> {
   const tabId = source.tabId;

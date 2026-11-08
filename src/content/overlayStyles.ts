@@ -1367,4 +1367,225 @@ export const OVERLAY_CSS = `
   .dpa-btn-save:hover {
     background: #0082e6;
   }
+
+  /* ========================================================================= */
+  /* DEVICE EMULATION (IFRAME CONTAINER & FRAMES)                              */
+  /* ========================================================================= */
+  .dpa-device-emulation-backdrop {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 2147483640;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    overflow: auto;
+    padding: 24px 20px 90px 20px;
+    box-sizing: border-box;
+    user-select: none;
+  }
+
+  .dpa-device-badge-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    background: rgba(30, 41, 59, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 12px;
+    color: #e2e8f0;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
+  }
+
+  .dpa-device-name-badge {
+    color: #38bdf8;
+    font-weight: 600;
+  }
+
+  .dpa-device-dimensions-badge {
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  .dpa-device-exit-btn {
+    appearance: none;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    color: #cbd5e1;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .dpa-device-exit-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #f87171;
+  }
+
+  /* Device frame shell */
+  .dpa-device-frame {
+    position: relative;
+    flex-shrink: 0;
+    background: #090d16;
+    box-shadow: 0 25px 65px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), height 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Mobile phone frame */
+  .dpa-device-frame--mobile {
+    border: 12px solid #1e2430;
+    border-radius: 44px;
+    box-shadow: 0 25px 65px -12px rgba(0, 0, 0, 0.85), 0 0 0 2px rgba(255, 255, 255, 0.14), inset 0 0 0 1px #000000;
+  }
+
+  /* Mobile notch / Dynamic Island */
+  .dpa-device-notch {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 112px;
+    height: 24px;
+    background: #000000;
+    border-radius: 16px;
+    z-index: 20;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 12px;
+    gap: 6px;
+  }
+
+  .dpa-device-camera {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #111827;
+    border: 1.5px solid #1f2937;
+  }
+
+  .dpa-device-speaker {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #0a0e1a;
+  }
+
+  /* Mobile home indicator pill */
+  .dpa-device-home-bar {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 128px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 2px;
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  /* Tablet frame (e.g. iPad) */
+  .dpa-device-frame--tablet {
+    border: 14px solid #1e2430;
+    border-radius: 28px;
+    box-shadow: 0 25px 65px -12px rgba(0, 0, 0, 0.85), 0 0 0 2px rgba(255, 255, 255, 0.14);
+  }
+
+  /* Desktop frame */
+  .dpa-device-frame--desktop {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.85);
+  }
+
+  /* Desktop macOS-style window chrome bar */
+  .dpa-device-desktop-chrome {
+    height: 34px;
+    background: #1e2430;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .dpa-window-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .dpa-window-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .dpa-window-dot--red { background: #ff5f56; }
+  .dpa-window-dot--yellow { background: #ffbd2e; }
+  .dpa-window-dot--green { background: #27c93f; }
+
+  .dpa-window-url {
+    flex: 1;
+    height: 22px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 11px;
+    color: #94a3b8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Screen container holding the iframe */
+  .dpa-device-screen-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  .dpa-device-frame--mobile .dpa-device-screen-container {
+    border-radius: 32px;
+  }
+
+  .dpa-device-frame--tablet .dpa-device-screen-container {
+    border-radius: 14px;
+  }
+
+  .dpa-device-frame--desktop .dpa-device-screen-container {
+    border-radius: 0 0 11px 11px;
+  }
+
+  /* The preview iframe */
+  .dpa-device-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    background: #ffffff;
+  }
 `;

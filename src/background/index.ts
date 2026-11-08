@@ -369,6 +369,16 @@ export function handleRuntimeMessage(
 export function registerDebuggerListeners(): void {
   if (
     typeof chrome !== 'undefined' &&
+    chrome.tabs &&
+    chrome.tabs.onRemoved?.addListener
+  ) {
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      void handleDebuggerDetach({ tabId }, 'target_closed');
+    });
+  }
+
+  if (
+    typeof chrome !== 'undefined' &&
     chrome.debugger &&
     chrome.debugger.onDetach?.addListener
   ) {

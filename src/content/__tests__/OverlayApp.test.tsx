@@ -385,5 +385,72 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     expect(document.getElementById(SHADOW_HOST_ID)).not.toBeNull();
     expect(mounted!.shadowRoot.querySelector('style')).not.toBeNull();
   });
+
+  it('renders centered device frame with preview iframe when emulation is enabled, while keeping FloatingBottomBar independent', async () => {
+    await renderOverlay();
+
+    // Initially, emulation is disabled -> no device frame or backdrop
+    expect(container.querySelector('[data-testid="dpa-device-emulation-backdrop"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dpa-device-frame"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+
+    // 1. Open device menu and select iPhone 15 Pro
+    const deviceBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-device-btn"]'
+    ) as HTMLButtonElement;
+    expect(deviceBtn).not.toBeNull();
+
+    await act(async () => {
+      deviceBtn.click();
+    });
+
+    const iphonePresetBtn = container.querySelector(
+      '[data-testid="dpa-device-preset-iphone-15-pro"]'
+    ) as HTMLButtonElement;
+    expect(iphonePresetBtn).not.toBeNull();
+
+    await act(async () => {
+      iphonePresetBtn.click();
+      await Promise.resolve();
+    });
+
+    // 2. Backdrop, device frame, mobile notch, and iframe should now be rendered
+    const backdrop = container.querySelector('[data-testid="dpa-device-emulation-backdrop"]');
+    expect(backdrop).not.toBeNull();
+
+    const frame = container.querySelector('[data-testid="dpa-device-frame"]') as HTMLElement;
+    expect(frame).not.toBeNull();
+    expect(frame.classList.contains('dpa-device-frame--mobile')).toBe(true);
+    expect(frame.style.width).toBe('393px');
+    expect(frame.style.height).toBe('852px');
+
+    const notch = container.querySelector('[data-testid="dpa-device-notch"]');
+    expect(notch).not.toBeNull();
+
+    const iframe = container.querySelector('[data-testid="dpa-device-iframe"]') as HTMLIFrameElement;
+    expect(iframe).not.toBeNull();
+    expect(iframe.src).toContain(window.location.href);
+
+    // 3. FloatingBottomBar is still present and sits outside the emulation frame
+    const bottomBar = container.querySelector('[data-testid="dpa-bottom-bar"]');
+    expect(bottomBar).not.toBeNull();
+    expect(frame.contains(bottomBar)).toBe(false);
+
+    // 4. Click Exit button to return to normal full-screen view
+    const exitBtn = container.querySelector(
+      '[data-testid="dpa-device-exit-btn"]'
+    ) as HTMLButtonElement;
+    expect(exitBtn).not.toBeNull();
+
+    await act(async () => {
+      exitBtn.click();
+      await Promise.resolve();
+    });
+
+    // Frame and backdrop should be completely unmounted
+    expect(container.querySelector('[data-testid="dpa-device-emulation-backdrop"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dpa-device-frame"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+  });
 });
 

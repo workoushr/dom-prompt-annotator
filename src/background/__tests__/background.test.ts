@@ -258,12 +258,13 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(handledSet).toBe(true);
 
     await new Promise((r) => setTimeout(r, 20));
-    expect(attachMock).toHaveBeenCalledWith({ tabId: 10 }, '1.3');
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 10 },
-      'Emulation.setDeviceMetricsOverride',
-      expect.objectContaining({ width: 375, height: 667 })
-    );
+    expect(attachMock).not.toHaveBeenCalled();
+    expect(sendCommandMock).not.toHaveBeenCalled();
+    expect(tabsSendMessageMock).toHaveBeenCalledWith(10, {
+      type: 'DEVICE_EMULATION_UPDATED',
+      tabId: 10,
+      config: expect.objectContaining({ presetId: 'iphone-se', enabled: true }),
+    });
     expect(setResponse).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
@@ -298,7 +299,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(handledClear).toBe(true);
 
     await new Promise((r) => setTimeout(r, 20));
-    expect(detachMock).toHaveBeenCalledWith({ tabId: 10 });
+    expect(detachMock).not.toHaveBeenCalled();
     expect(clearResponse).toHaveBeenCalledWith({ ok: true });
   });
 

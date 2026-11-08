@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AnnotationItem,
   DEFAULT_DEVICE_EMULATION_CONFIG,
+  DEVICE_PRESETS,
   DeviceEmulationConfig,
   ElementMetadata,
   ElementRect,
@@ -179,6 +180,10 @@ export const OverlayApp: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const previewUrl =
+    typeof window !== 'undefined' && window.location.href
+      ? window.location.href
+      : 'about:blank';
 
   const overlayRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -446,11 +451,42 @@ export const OverlayApp: React.FC = () => {
           // Fallback for tests or disconnected runtime
         }
       }
-      setEmulationConfig((prev) => ({
-        ...prev,
-        ...config,
-        enabled: true,
-      }));
+      setEmulationConfig((prev) => {
+        let baseConfig = { ...prev };
+        if (config.presetId) {
+          const matchedPreset = DEVICE_PRESETS.find((p) => p.id === config.presetId);
+          if (matchedPreset) {
+            baseConfig = {
+              ...baseConfig,
+              presetId: matchedPreset.id,
+              name: matchedPreset.name,
+              width: matchedPreset.width,
+              height: matchedPreset.height,
+              deviceScaleFactor: matchedPreset.deviceScaleFactor,
+              mobile: matchedPreset.mobile,
+              touch: matchedPreset.touch,
+            };
+          }
+        }
+        const merged: DeviceEmulationConfig = {
+          ...baseConfig,
+          ...config,
+          enabled: true,
+        };
+        let targetWidth = merged.width;
+        let targetHeight = merged.height;
+        if (merged.orientation === 'landscape' && targetWidth < targetHeight) {
+          [targetWidth, targetHeight] = [targetHeight, targetWidth];
+        } else if (
+          merged.orientation === 'portrait' &&
+          targetWidth > targetHeight
+        ) {
+          [targetWidth, targetHeight] = [targetHeight, targetWidth];
+        }
+        merged.width = targetWidth;
+        merged.height = targetHeight;
+        return merged;
+      });
     },
     []
   );
@@ -1473,6 +1509,95 @@ export const OverlayApp: React.FC = () => {
           setIsDrawerOpen(false);
         }}
       />
+
+      {/* Device Emulation Preview Frame & Iframe Container */}
+      {emulationConfig.enabled && (
+        <div
+          className="dpa-device-emulation-backdrop"
+          data-testid="dpa-device-emulation-backdrop"
+        >
+          <div className="dpa-device-badge-wrap" data-testid="dpa-device-header-bar">
+            <span className="dpa-device-name-badge">
+              {emulationConfig.name || 'Device Preview'}
+            </span>
+            <span className="dpa-device-dimensions-badge">
+              {emulationConfig.width} × {emulationConfig.height}
+              {emulationConfig.orientation ? ` (${emulationConfig.orientation})` : ''}
+              {emulationConfig.deviceScaleFactor && emulationConfig.deviceScaleFactor > 1
+                ? ` @${emulationConfig.deviceScaleFactor}x`
+                : ''}
+            </span>
+            <button
+              type="button"
+              className="dpa-device-exit-btn"
+              data-testid="dpa-device-exit-btn"
+              onClick={() => void handleClearDeviceEmulation()}
+              title="エミュレーションを終了して通常表示に戻す"
+            >
+              ✕ 通常表示に戻す
+            </button>
+          </div>
+
+          <div
+            className={`dpa-device-frame ${
+              emulationConfig.mobile
+                ? 'dpa-device-frame--mobile'
+                : emulationConfig.presetId === 'ipad-mini'
+                ? 'dpa-device-frame--tablet'
+                : 'dpa-device-frame--desktop'
+            } ${
+              emulationConfig.orientation === 'landscape'
+                ? 'dpa-device-frame--landscape'
+                : 'dpa-device-frame--portrait'
+            }`}
+            data-testid="dpa-device-frame"
+            style={{
+              width: `${emulationConfig.width}px`,
+              height: `${emulationConfig.height}px`,
+            }}
+          >
+            {/* Mobile Notch & Camera */}
+            {emulationConfig.mobile && (
+              <div className="dpa-device-notch" data-testid="dpa-device-notch">
+                <div className="dpa-device-camera" />
+                <div className="dpa-device-speaker" />
+              </div>
+            )}
+
+            {/* Desktop macOS-style Chrome Header */}
+            {!emulationConfig.mobile && emulationConfig.presetId !== 'ipad-mini' && (
+              <div className="dpa-device-desktop-chrome" data-testid="dpa-device-desktop-chrome">
+                <div className="dpa-window-dots">
+                  <span className="dpa-window-dot dpa-window-dot--red" />
+                  <span className="dpa-window-dot dpa-window-dot--yellow" />
+                  <span className="dpa-window-dot dpa-window-dot--green" />
+                </div>
+                <div className="dpa-window-url" title={previewUrl}>
+                  🔒 {previewUrl}
+                </div>
+              </div>
+            )}
+
+            {/* Device Screen Container with Iframe */}
+            <div
+              className="dpa-device-screen-container"
+              data-testid="dpa-device-screen-container"
+            >
+              <iframe
+                src={previewUrl}
+                className="dpa-device-iframe"
+                data-testid="dpa-device-iframe"
+                title={`Device Preview - ${emulationConfig.name || 'Custom'}`}
+              />
+            </div>
+
+            {/* Mobile Home Bar */}
+            {emulationConfig.mobile && (
+              <div className="dpa-device-home-bar" data-testid="dpa-device-home-bar" />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Figma UI3 Floating Bottom Bar */}
       <FloatingBottomBar

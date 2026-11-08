@@ -8,8 +8,7 @@
     "activeTab",
     "storage",
     "scripting",
-    "tabs",
-    "debugger"
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"

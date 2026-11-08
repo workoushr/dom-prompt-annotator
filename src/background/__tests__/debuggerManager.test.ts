@@ -5,11 +5,12 @@ import {
   getDeviceEmulationState,
   handleDebuggerDetach,
   isDebuggerAttached,
+  isDeviceEmulationActive,
   resetDebuggerManagerForTests,
 } from '../debuggerManager';
 import { DEFAULT_DEVICE_EMULATION_CONFIG } from '../../types/annotation';
 
-describe('debuggerManager (CDP Device Emulation)', () => {
+describe('debuggerManager (Iframe Device Emulation State Management)', () => {
   let attachMock: ReturnType<typeof vi.fn>;
   let sendCommandMock: ReturnType<typeof vi.fn>;
   let detachMock: ReturnType<typeof vi.fn>;
@@ -43,47 +44,33 @@ describe('debuggerManager (CDP Device Emulation)', () => {
     const state = getDeviceEmulationState(101);
     expect(state).toEqual(DEFAULT_DEVICE_EMULATION_CONFIG);
     expect(state.enabled).toBe(false);
+    expect(isDeviceEmulationActive(101)).toBe(false);
   });
 
-  it('attaches debugger and sends CDP emulation commands with preset values', async () => {
+  it('sets device emulation state with preset values without invoking chrome.debugger (CDP)', async () => {
     const tabId = 1;
     const config = await attachAndEmulateDevice(tabId, {
       presetId: 'iphone-15-pro',
       orientation: 'portrait',
     });
 
-    expect(attachMock).toHaveBeenCalledWith({ tabId: 1 }, '1.3');
+    // CDP debugger should NOT be attached or called
+    expect(attachMock).not.toHaveBeenCalled();
+    expect(sendCommandMock).not.toHaveBeenCalled();
+
+    // Internal state tracking
     expect(isDebuggerAttached(tabId)).toBe(true);
-
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 1 },
-      'Emulation.setDeviceMetricsOverride',
-      {
-        width: 393,
-        height: 852,
-        deviceScaleFactor: 3,
-        mobile: true,
-        screenOrientation: {
-          angle: 0,
-          type: 'portraitPrimary',
-        },
-      }
-    );
-
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 1 },
-      'Emulation.setTouchEmulationEnabled',
-      {
-        enabled: true,
-        maxTouchPoints: 5,
-      }
-    );
+    expect(isDeviceEmulationActive(tabId)).toBe(true);
 
     expect(config.enabled).toBe(true);
     expect(config.presetId).toBe('iphone-15-pro');
     expect(config.width).toBe(393);
     expect(config.height).toBe(852);
+    expect(config.mobile).toBe(true);
+    expect(config.touch).toBe(true);
+    expect(config.deviceScaleFactor).toBe(3);
 
+    // Content script should be notified with updated configuration
     expect(sendMessageMock).toHaveBeenCalledWith(1, {
       type: 'DEVICE_EMULATION_UPDATED',
       tabId: 1,
@@ -101,20 +88,8 @@ describe('debuggerManager (CDP Device Emulation)', () => {
       orientation: 'landscape',
     });
 
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 2 },
-      'Emulation.setDeviceMetricsOverride',
-      {
-        width: 667,
-        height: 375,
-        deviceScaleFactor: 2,
-        mobile: true,
-        screenOrientation: {
-          angle: 90,
-          type: 'landscapePrimary',
-        },
-      }
-    );
+    // No CDP calls
+    expect(sendCommandMock).not.toHaveBeenCalled();
 
     // Verify config dimensions are synchronized with swapped values
     expect(config.width).toBe(667);
@@ -125,54 +100,34 @@ describe('debuggerManager (CDP Device Emulation)', () => {
     expect(savedState.height).toBe(375);
   });
 
-  it('rolls back debugger attachment and re-throws error if CDP command fails', async () => {
-    const tabId = 99;
-    sendCommandMock.mockRejectedValueOnce(new Error('CDP Emulation failed'));
-
-    await expect(
-      attachAndEmulateDevice(tabId, { presetId: 'iphone-15-pro' })
-    ).rejects.toThrow('CDP Emulation failed');
-
-    expect(attachMock).toHaveBeenCalledWith({ tabId: 99 }, '1.3');
-    expect(detachMock).toHaveBeenCalledWith({ tabId: 99 });
-    expect(isDebuggerAttached(tabId)).toBe(false);
-  });
-
-  it('does not re-attach debugger if already attached to the same tab', async () => {
+  it('swaps width and height back when orientation is set to portrait', async () => {
     const tabId = 3;
     await attachAndEmulateDevice(tabId, {
-      presetId: 'desktop',
+      presetId: 'iphone-se', // 375x667
+      orientation: 'landscape',
     });
-    expect(attachMock).toHaveBeenCalledTimes(1);
 
-    await attachAndEmulateDevice(tabId, {
-      width: 1280,
-      height: 800,
+    const portraitConfig = await attachAndEmulateDevice(tabId, {
+      orientation: 'portrait',
     });
-    expect(attachMock).toHaveBeenCalledTimes(1);
+
+    expect(portraitConfig.width).toBe(375);
+    expect(portraitConfig.height).toBe(667);
   });
 
-  it('clears device emulation, detaches debugger, and notifies content script', async () => {
+  it('clears device emulation and notifies content script without CDP detach', async () => {
     const tabId = 4;
     await attachAndEmulateDevice(tabId, { presetId: 'ipad-mini' });
     expect(isDebuggerAttached(tabId)).toBe(true);
 
-    sendCommandMock.mockClear();
     sendMessageMock.mockClear();
 
     await clearDeviceEmulation(tabId);
 
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 4 },
-      'Emulation.clearDeviceMetricsOverride'
-    );
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 4 },
-      'Emulation.setTouchEmulationEnabled',
-      { enabled: false }
-    );
-    expect(detachMock).toHaveBeenCalledWith({ tabId: 4 });
+    // No CDP detach calls
+    expect(detachMock).not.toHaveBeenCalled();
     expect(isDebuggerAttached(tabId)).toBe(false);
+    expect(isDeviceEmulationActive(tabId)).toBe(false);
 
     const clearedState = getDeviceEmulationState(tabId);
     expect(clearedState.enabled).toBe(false);
