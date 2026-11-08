@@ -323,7 +323,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
                 .toString()
                 .padStart(2, '0')}:${Math.floor((recordingDurationMs % 60000) / 1000)
                 .toString()
-                .padStart(2, '0')}.${Math.floor((recordingDurationMs % 1000) / 100)}`
+                .padStart(2, '0')}`
             : 'REC'}
         </span>
       </button>

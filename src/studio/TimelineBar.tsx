@@ -160,7 +160,7 @@ export const TimelineBar: React.FC<TimelineBarProps> = ({
         className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-400 text-[10px] font-semibold font-mono"
         data-testid="timeline-duration-badge"
       >
-        <CircleDot className="w-2.5 h-2.5 text-rose-500 animate-pulse" />
+        <CircleDot className="w-2.5 h-2.5 text-rose-500" />
         <span>{(safeDuration / 1000).toFixed(1)}s</span>
       </div>
     </footer>

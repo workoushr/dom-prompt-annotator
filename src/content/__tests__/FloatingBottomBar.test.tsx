@@ -220,4 +220,26 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     });
     expect(onToggleMinimize).toHaveBeenCalledTimes(1);
   });
+
+  it('renders recording state with MM:SS duration (without milliseconds or decimals)', async () => {
+    const onToggleRecording = vi.fn();
+    // 65432 ms -> 01:05 (1 min 5 sec)
+    await renderComponent({
+      isRecording: true,
+      recordingDurationMs: 65432,
+      onToggleRecording,
+    });
+
+    const recBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-rec-btn"]'
+    ) as HTMLButtonElement;
+    expect(recBtn).not.toBeNull();
+    expect(recBtn.textContent).toContain('01:05');
+    expect(recBtn.textContent).not.toContain('.');
+
+    await act(async () => {
+      recBtn.click();
+    });
+    expect(onToggleRecording).toHaveBeenCalledTimes(1);
+  });
 });

@@ -3,7 +3,7 @@ import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OverlayApp } from '../content/OverlayApp';
 import { SidePanelApp } from '../sidepanel/SidePanelApp';
-import { resetMemoryStoreForTests } from '../utils/storage';
+import { resetMemoryStoreForTests, savePageState } from '../utils/storage';
 import { SHADOW_HOST_ID } from '../utils/masker';
 import { ExportPayload, ExtensionMessage } from '../types/annotation';
 
@@ -291,20 +291,14 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     await flushAsync();
 
     // =========================================================================
-    // Step 1: Enable Inspect Mode from SidePanelApp
+    // Step 1: Inspect Mode is enabled by default
     // =========================================================================
     const inspectToggleBtn = sidePanelMount.querySelector(
       '[data-testid="toggle-inspect-mode"]'
     ) as HTMLButtonElement;
     expect(inspectToggleBtn).not.toBeNull();
-    expect(inspectToggleBtn.textContent).toContain('通常操作モード');
-
-    await act(async () => {
-      inspectToggleBtn.click();
-    });
-    await flushAsync();
-
     expect(inspectToggleBtn.textContent).toContain('選択モード (Inspect ON)');
+
     const modePill = overlayMount.querySelector('[data-testid="dpa-mode-pill"]');
     expect(modePill?.textContent).toContain('Selection Mode');
 

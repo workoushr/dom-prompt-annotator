@@ -153,6 +153,7 @@ describe('SidePanelApp UI (src/sidepanel/SidePanelApp.tsx)', () => {
   }
 
   it('synchronizes with active tab, toggles Inspect Mode, and updates globalInstruction', async () => {
+    await savePageState(activeTabUrl, { inspectMode: false });
     await renderSidePanel();
 
     const inspectBtn = container.querySelector(

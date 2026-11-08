@@ -27,6 +27,69 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+export function processDomSnapshot(html: string, maskAllText: boolean): string {
+  if (!html) return '';
+
+  try {
+    if (typeof DOMParser !== 'undefined') {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      if (maskAllText) {
+        const walk = (node: Node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent || '';
+            if (text.trim().length > 0) {
+              node.textContent = '[MASKED]';
+            }
+          } else if (
+            node.nodeType === Node.ELEMENT_NODE &&
+            !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.nodeName)
+          ) {
+            for (let i = 0; i < node.childNodes.length; i++) {
+              walk(node.childNodes[i]);
+            }
+          }
+        };
+
+        walk(doc.body || doc.documentElement);
+      }
+
+      // Inject studio inspection & cursor styles
+      let styleEl = doc.querySelector('style#dpa-studio-injected-styles');
+      if (!styleEl) {
+        styleEl = doc.createElement('style');
+        styleEl.id = 'dpa-studio-injected-styles';
+        (doc.head || doc.documentElement).appendChild(styleEl);
+      }
+      styleEl.textContent = `
+        * {
+          cursor: crosshair !important;
+        }
+        .dpa-hover-target {
+          outline: 2px dashed #0d99ff !important;
+          outline-offset: 1px !important;
+        }
+        ${
+          maskAllText
+            ? `
+          body * {
+            user-select: none !important;
+          }
+        `
+            : ''
+        }
+      `;
+
+      return doc.documentElement.outerHTML;
+    }
+  } catch {
+    // Fallback if parsing fails
+  }
+
+  return html;
+}
+
 const SAMPLE_SESSION: RecordingSession = {
   sessionId: 'sample_session_cloudmetrics',
   url: 'https://cloudmetrics.internal.io/dashboard',
@@ -34,6 +97,7 @@ const SAMPLE_SESSION: RecordingSession = {
   createdAt: new Date().toISOString(),
   durationMs: 14200,
   viewport: { width: 393, height: 852 },
+  initialDomSnapshot: `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8fafc;padding:16px;color:#0f172a;}.header{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #e2e8f0;margin-bottom:16px;}.header-title{font-weight:700;font-size:14px;}.avatar{width:24px;height:24px;border-radius:12px;background:#4f46e5;color:white;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;}.card{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,0.05);}.mrr-label{font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;margin-bottom:4px;}.mrr-value{font-size:20px;font-weight:700;color:#0f172a;}.mrr-sub{font-size:11px;color:#10b981;font-weight:500;margin-top:2px;}.btn-wrap{position:relative;margin-bottom:16px;}.cta-button{width:100%;padding:10px 16px;background:#4f46e5;color:white;border:none;border-radius:8px;font-weight:500;font-size:12px;cursor:pointer;transition:background 0.15s;}.cta-button:hover{background:#4338ca;}.toast{background:#0f172a;color:white;padding:12px;border-radius:12px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);border:1px solid #1e293b;display:flex;gap:10px;align-items:flex-start;}.toast-icon{width:16px;height:16px;border-radius:8px;background:#10b981;color:#0f172a;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;margin-top:2px;}.toast-title{font-weight:600;font-size:12px;}.toast-desc{font-size:10px;color:#94a3b8;margin-top:2px;}</style></head><body><div class="header"><div class="header-title">CloudMetrics</div><div class="avatar">JD</div></div><div class="card mrr-metric-card" data-component="MRRMetricCard"><div class="mrr-label">MRR (月次経常収益)</div><div class="mrr-value">$32,450</div><div class="mrr-sub">↑ 18.4% 先月比</div></div><div class="btn-wrap"><button type="button" id="upgrade-cta" class="cta-button" data-component="HeroPricingCard" data-testid="replayed-cta-button">プロプランにアップグレード</button></div><div id="replayed-dynamic-toast" class="toast toast-notification" data-component="ToastProvider" data-testid="replayed-toast"><div class="toast-icon">✓</div><div><div class="toast-title">設定を保存しました</div><div class="toast-desc">プランが正常に更新されました（一瞬で消えるUI）</div></div></div></body></html>`,
   globalInstruction: 'Tailwind CSS / React 18 準拠のモダンUIコンポーネントにリファクタリングしてください。',
   maskingConfig: {
     autoMaskPII: true,
@@ -172,6 +236,91 @@ export const StudioApp: React.FC = () => {
   } | null>(null);
   const [popoverInstruction, setPopoverInstruction] = useState('');
   const [popoverPos, setPopoverPos] = useState({ top: 260, left: 40 });
+
+  // Iframe ref & processed snapshot for DOM replay
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const processedSnapshot = useMemo(() => {
+    return processDomSnapshot(session.initialDomSnapshot || '', maskAllText);
+  }, [session.initialDomSnapshot, maskAllText]);
+
+  // Synchronize iframe document and attach click inspection listener
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !session.initialDomSnapshot) return;
+
+    try {
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc) return;
+
+      // Populate document reliably in both browsers and jsdom
+      doc.documentElement.innerHTML = processedSnapshot;
+
+      let lastHovered: HTMLElement | null = null;
+      const handleMouseOver = (ev: MouseEvent) => {
+        const target = ev.target as HTMLElement;
+        if (!target || target === doc.body || target === doc.documentElement) return;
+        if (lastHovered && lastHovered !== target) {
+          lastHovered.classList.remove('dpa-hover-target');
+        }
+        target.classList.add('dpa-hover-target');
+        lastHovered = target;
+      };
+
+      const handleMouseOut = (ev: MouseEvent) => {
+        const target = ev.target as HTMLElement;
+        target?.classList?.remove('dpa-hover-target');
+      };
+
+      const handleClick = (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const target = ev.target as HTMLElement;
+        if (!target || target === doc.body || target === doc.documentElement) return;
+
+        const rect = target.getBoundingClientRect();
+        const selector = target.id
+          ? `#${target.id}`
+          : target.className && typeof target.className === 'string'
+          ? `${target.tagName.toLowerCase()}.${target.className.trim().split(/\s+/).join('.')}`
+          : target.tagName.toLowerCase();
+
+        const compName = target.getAttribute('data-component') || undefined;
+
+        setPopoverTarget({
+          selector,
+          tagName: target.tagName.toLowerCase(),
+          textContent: target.textContent?.trim().slice(0, 100) || '',
+          componentName: compName,
+          computedStyles: {
+            color: window.getComputedStyle ? window.getComputedStyle(target).color : '',
+            backgroundColor: window.getComputedStyle ? window.getComputedStyle(target).backgroundColor : '',
+          },
+        });
+        setPopoverInstruction(
+          compName === 'HeroPricingCard'
+            ? 'CTAボタンをグラデーションに変更し、ホバー演出を追加'
+            : ''
+        );
+        setPopoverPos({
+          top: Math.max(20, Math.min(rect.bottom + 10, artboardHeight - 200)),
+          left: Math.max(20, Math.min(rect.left, 200)),
+        });
+      };
+
+      doc.addEventListener('mouseover', handleMouseOver);
+      doc.addEventListener('mouseout', handleMouseOut);
+      doc.addEventListener('click', handleClick);
+
+      return () => {
+        doc.removeEventListener('mouseover', handleMouseOver);
+        doc.removeEventListener('mouseout', handleMouseOut);
+        doc.removeEventListener('click', handleClick);
+      };
+    } catch {
+      // Ignore cross-origin error if any
+    }
+  }, [processedSnapshot, session.initialDomSnapshot, artboardHeight]);
 
   // Toast / feedback alert
   const [toastAlert, setToastAlert] = useState<string | null>(null);
@@ -547,119 +696,36 @@ export const StudioApp: React.FC = () => {
             )}
 
             {/* REPLAYED WEB APP CONTENT */}
-            <div className="flex-1 bg-slate-50 overflow-y-auto p-4 space-y-4 text-slate-900 relative">
-              {/* Web App Navigation */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                <div className="font-bold text-sm text-slate-900 tracking-tight">
-                  {displaySampleText('CloudMetrics')}
-                </div>
-                <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-semibold">
-                  JD
-                </div>
-              </div>
-
-              {/* MRR Card */}
+            {session.initialDomSnapshot ? (
               <div
-                className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm space-y-2 cursor-pointer hover:ring-2 hover:ring-[#0d99ff] transition"
-                onClick={(e) => {
-                  setPopoverTarget({
-                    selector: 'div.mrr-metric-card',
-                    tagName: 'div',
-                    textContent: displaySampleText('MRR (月次経常収益) $32,450'),
-                    componentName: 'MRRMetricCard',
-                  });
-                  setPopoverInstruction('MRRの推移グラフと前月比較率を詳細表示できるようにする');
-                  setPopoverPos({ top: 110, left: 20 });
-                }}
+                className="flex-1 bg-white overflow-hidden relative"
+                data-testid="studio-replayed-iframe-wrap"
               >
-                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                  {displaySampleText('MRR (月次経常収益)')}
-                </span>
-                <div className="text-xl font-bold text-slate-900">{displaySampleText('$32,450')}</div>
-                <div className="text-[11px] text-emerald-600 font-medium">
-                  {displaySampleText('↑ 18.4% 先月比')}
-                </div>
+                <iframe
+                  ref={iframeRef}
+                  title="Recorded DOM Snapshot Screen"
+                  className="w-full h-full border-none block bg-white"
+                  srcDoc={processedSnapshot}
+                  sandbox="allow-same-origin allow-scripts"
+                  data-testid="studio-replayed-iframe"
+                />
               </div>
-
-              {/* Target 1: CTA Button (HeroPricingCard) */}
-              <div className="relative group">
-                <button
-                  type="button"
-                  id="target-upgrade-btn"
-                  onClick={(e) => {
-                    setPopoverTarget({
-                      selector: 'button#upgrade-cta',
-                      tagName: 'button',
-                      textContent: displaySampleText('プロプランにアップグレード'),
-                      componentName: 'HeroPricingCard',
-                      computedStyles: {
-                        'background-color': 'rgb(79, 70, 229)',
-                        color: 'rgb(255, 255, 255)',
-                      },
-                    });
-                    setPopoverInstruction('CTAボタンをグラデーションに変更し、ホバー演出を追加');
-                    setPopoverPos({ top: 190, left: 20 });
-                  }}
-                  className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-xs shadow-sm transition flex items-center justify-center cursor-pointer hover:ring-2 hover:ring-[#0d99ff]"
-                  data-testid="replayed-cta-button"
-                >
-                  {displaySampleText('プロプランにアップグレード')}
-                </button>
-                {/* Selection badge #1 */}
-                <div className="absolute -top-2.5 -right-2 px-1.5 py-0.5 rounded bg-[#0d99ff] text-white text-[9px] font-semibold font-mono pointer-events-none shadow-sm">
-                  #1
-                </div>
-              </div>
-
-              {/* Target 2: Transient Dynamic Toast (Visible between 3.0s and 6.0s) */}
+            ) : (
               <div
-                id="replayed-dynamic-toast"
-                className={`transition-all duration-200 transform relative cursor-pointer ${
-                  isToastVisible
-                    ? 'opacity-100 translate-y-0 pointer-events-auto'
-                    : 'opacity-20 translate-y-2 pointer-events-none'
-                }`}
-                onClick={(e) => {
-                  setPopoverTarget({
-                    selector: 'div.toast-notification',
-                    tagName: 'div',
-                    textContent: displaySampleText('設定を保存しました。プランが更新されました'),
-                    componentName: 'ToastProvider',
-                    computedStyles: {
-                      'background-color': 'rgb(15, 23, 42)',
-                      color: 'rgb(255, 255, 255)',
-                    },
-                  });
-                  setPopoverInstruction('トーストの表示時間を5秒に延長し、閉じるボタンを明示的に配置する');
-                  setPopoverPos({ top: 250, left: 20 });
-                }}
-                data-testid="replayed-toast"
+                className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#18181b] text-zinc-400 h-full select-none"
+                data-testid="studio-empty-snapshot"
               >
-                <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-800 flex items-start gap-2.5 hover:ring-2 hover:ring-[#0d99ff]">
-                  <div className="w-4 h-4 rounded-full bg-emerald-500 text-slate-900 flex items-center justify-center text-[10px] font-bold mt-0.5">
-                    ✓
-                  </div>
-                  <div className="flex-1">
-                    <div className="font-semibold text-xs text-white">
-                      {displaySampleText('設定を保存しました')}
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      {displaySampleText('プランが正常に更新されました（一瞬で消えるUI）')}
-                    </div>
-                  </div>
+                <div className="w-12 h-12 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center mb-3 text-zinc-300">
+                  <Code2 className="w-6 h-6" />
                 </div>
-                {/* Selection badge #2 */}
-                <div className="absolute -top-2.5 -right-2 px-1.5 py-0.5 rounded bg-[#0d99ff] text-white text-[9px] font-semibold font-mono pointer-events-none shadow-sm ring-2 ring-white">
-                  #2
+                <div className="text-sm font-semibold text-zinc-200 mb-1">
+                  スナップショットが記録されていません
+                </div>
+                <div className="text-xs text-zinc-500 max-w-xs">
+                  録画セッションにDOMスナップショットが含まれていないか、空です。
                 </div>
               </div>
-
-              {/* Background filler cards */}
-              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
-                <div className="h-3 bg-slate-100 rounded w-1/3" />
-                <div className="h-6 bg-slate-50 rounded" />
-              </div>
-            </div>
+            )}
           </div>
 
           {/* IN-CANVAS FIGMA POPOVER (Inspect Card anchored to target) */}

@@ -303,19 +303,10 @@ export const OVERLAY_CSS = `
     height: 7px;
     border-radius: 50%;
     background: #f43f5e;
-    box-shadow: 0 0 6px #f43f5e;
-    animation: dpaPulse 1.8s infinite ease-in-out;
   }
 
   .dpa-rec-dot--active {
     background: #ff1a40;
-    box-shadow: 0 0 10px #ff1a40;
-    animation: dpaPulse 0.8s infinite ease-in-out;
-  }
-
-  @keyframes dpaPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.8); }
   }
 
   /* 4. Annotations Drawer Button */
