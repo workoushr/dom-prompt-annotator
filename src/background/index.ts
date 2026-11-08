@@ -94,12 +94,14 @@ export async function handleActionClicked(tab: chrome.tabs.Tab): Promise<void> {
   }
 
   if (tabUrl) {
-    await savePageState(tabUrl, { inspectMode: true });
+    const currentState = await getPageState(tabUrl);
+    const nextInspect = !currentState.inspectMode;
+    await savePageState(tabUrl, { inspectMode: nextInspect });
 
     if (typeof tabId === 'number' && !isRestrictedTabUrl(tabUrl)) {
       await ensureContentScriptAndSendMessage(tabId, tabUrl, {
         type: 'SET_INSPECT_MODE',
-        enabled: true,
+        enabled: nextInspect,
         url: tabUrl,
       });
     }

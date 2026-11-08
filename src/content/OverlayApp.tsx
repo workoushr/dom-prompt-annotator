@@ -1,12 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AnnotationItem,
+  DEFAULT_DEVICE_EMULATION_CONFIG,
+  DeviceEmulationConfig,
   ElementMetadata,
   ElementRect,
   ExtensionMessage,
   FrameworkMetadata,
+  MaskingConfig,
   PageAnnotationState,
 } from '../types/annotation';
+import {
+  buildExportPayload,
+  formatAsJson,
+  formatAsMarkdownPrompt,
+} from '../utils/promptFormatter';
+import { FloatingBottomBar } from './FloatingBottomBar';
+import { AnnotationDrawer } from './AnnotationDrawer';
 import {
   applyMaskingToAnnotation,
   findMaskedElementsOnPage,
@@ -159,6 +169,14 @@ export const OverlayApp: React.FC = () => {
   });
   const [layoutTick, setLayoutTick] = useState(0);
 
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [emulationConfig, setEmulationConfig] = useState<DeviceEmulationConfig>(
+    () => ({ ...DEFAULT_DEVICE_EMULATION_CONFIG })
+  );
+  const [isCopied, setIsCopied] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const overlayRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stateRef = useRef<PageAnnotationState>(state);
@@ -166,6 +184,24 @@ export const OverlayApp: React.FC = () => {
 
   const popoverRef = useRef<PopoverState | null>(popover);
   popoverRef.current = popover;
+
+  // Load initial device emulation state if available
+  useEffect(() => {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      try {
+        chrome.runtime.sendMessage(
+          { type: 'GET_DEVICE_EMULATION' },
+          (response: { ok?: boolean; config?: DeviceEmulationConfig }) => {
+            if (response?.ok && response.config) {
+              setEmulationConfig(response.config);
+            }
+          }
+        );
+      } catch {
+        // Ignore in tests or disconnected runtime
+      }
+    }
+  }, []);
 
   // Load initial state on mount
   useEffect(() => {
@@ -367,6 +403,128 @@ export const OverlayApp: React.FC = () => {
     },
     []
   );
+
+  const handleSetDeviceEmulation = useCallback(
+    async (config: Partial<DeviceEmulationConfig>) => {
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        try {
+          const res = (await chrome.runtime.sendMessage({
+            type: 'SET_DEVICE_EMULATION',
+            config,
+          })) as { ok?: boolean; config?: DeviceEmulationConfig } | undefined;
+          if (res?.ok && res.config) {
+            setEmulationConfig(res.config);
+            return;
+          }
+        } catch {
+          // Fallback for tests or disconnected runtime
+        }
+      }
+      setEmulationConfig((prev) => ({
+        ...prev,
+        ...config,
+        enabled: true,
+      }));
+    },
+    []
+  );
+
+  const handleClearDeviceEmulation = useCallback(async () => {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'CLEAR_DEVICE_EMULATION',
+        });
+      } catch {
+        // Fallback
+      }
+    }
+    setEmulationConfig({ ...DEFAULT_DEVICE_EMULATION_CONFIG, enabled: false });
+  }, []);
+
+  const handleCopyPrompt = useCallback(
+    async (format: 'markdown' | 'json' = 'markdown') => {
+      const payload = buildExportPayload(stateRef.current, {
+        url: window.location.href,
+        title: document.title,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        },
+      });
+
+      const textToCopy =
+        format === 'json'
+          ? formatAsJson(payload)
+          : formatAsMarkdownPrompt(payload);
+
+      try {
+        if (
+          typeof navigator !== 'undefined' &&
+          navigator.clipboard &&
+          typeof navigator.clipboard.writeText === 'function'
+        ) {
+          await navigator.clipboard.writeText(textToCopy);
+        }
+      } catch {
+        // Fallback or ignore in restricted contexts
+      }
+
+      setIsCopied(true);
+      setToastMessage(
+        format === 'json'
+          ? 'DOM JSONをクリップボードにコピーしました'
+          : 'AIプロンプトをクリップボードにコピーしました'
+      );
+
+      setTimeout(() => {
+        setIsCopied(false);
+      }, 2500);
+
+      setTimeout(() => {
+        setToastMessage(null);
+      }, 3000);
+    },
+    []
+  );
+
+  const handleUpdateGlobalInstruction = useCallback(
+    async (globalInstruction: string) => {
+      await updateAndPersistState({ globalInstruction });
+    },
+    [updateAndPersistState]
+  );
+
+  const handleUpdateMaskingConfig = useCallback(
+    async (maskingConfigPatch: Partial<MaskingConfig>) => {
+      const currentConfig = stateRef.current.maskingConfig;
+      const mergedConfig = {
+        ...currentConfig,
+        ...maskingConfigPatch,
+      };
+      await updateAndPersistState({ maskingConfig: mergedConfig });
+    },
+    [updateAndPersistState]
+  );
+
+  const handleClearAnnotations = useCallback(async () => {
+    setPopover(null);
+    await updateAndPersistState({ annotations: [] });
+  }, [updateAndPersistState]);
+
+  const handleScrollToElement = useCallback((selector: string, id: number) => {
+    const matchingAnn = stateRef.current.annotations.find((a) => a.id === id);
+    const targetEl = findElementBySelectorOrXPath(
+      selector,
+      matchingAnn?.element.xpath,
+      document
+    );
+    if (targetEl && typeof targetEl.scrollIntoView === 'function') {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setHighlightTarget({ selector, id });
+    setLayoutTick((t) => t + 1);
+  }, []);
 
   // Mousemove & Click capture listeners for inspectMode
   useEffect(() => {
@@ -636,6 +794,8 @@ export const OverlayApp: React.FC = () => {
             if (!message.enabled) {
               setPopover(null);
               setHoveredInfo(null);
+            } else {
+              setIsMinimized(false);
             }
             sendResponse(updated);
           });
@@ -769,6 +929,14 @@ export const OverlayApp: React.FC = () => {
               height: window.innerHeight,
             },
           });
+          return false;
+        }
+
+        case 'DEVICE_EMULATION_UPDATED': {
+          if (message.config) {
+            setEmulationConfig(message.config);
+          }
+          sendResponse({ ok: true });
           return false;
         }
 
@@ -1198,33 +1366,58 @@ export const OverlayApp: React.FC = () => {
         </>
       )}
 
-      {/* Floating Mode Indicator Pill */}
-      {(state.inspectMode || state.annotations.length > 0) && (
-        <div
-          className={`dpa-mode-pill ${
-            state.inspectMode ? 'dpa-mode-pill--active' : ''
-          }`}
-          data-testid="dpa-mode-pill"
-        >
-          <span
-            className={`dpa-mode-dot ${
-              state.inspectMode ? 'dpa-mode-dot--active' : ''
-            }`}
-          />
-          <span>
-            {state.inspectMode
-              ? 'Selection Mode (要素選択中)'
-              : `Normal Mode (${state.annotations.length}件)`}
-          </span>
-          <button
-            type="button"
-            className="dpa-mode-toggle-btn"
-            data-testid="dpa-mode-toggle-btn"
-            onClick={() => void handleToggleInspectMode()}
-            title="Toggle Selection Mode (Alt+S)"
-          >
-            {state.inspectMode ? '通常操作へ (Alt+S)' : '要素選択 (Alt+S)'}
-          </button>
+      {/* Annotation & Settings Drawer */}
+      <AnnotationDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        annotations={state.annotations}
+        globalInstruction={state.globalInstruction}
+        maskingConfig={state.maskingConfig}
+        onUpdateGlobalInstruction={handleUpdateGlobalInstruction}
+        onUpdateMaskingConfig={handleUpdateMaskingConfig}
+        onDeleteAnnotation={handleDeleteAnnotation}
+        onClearAnnotations={handleClearAnnotations}
+        onScrollToElement={handleScrollToElement}
+        onSelectAnnotation={(ann) => {
+          const resolvedEl = findElementBySelectorOrXPath(
+            ann.element.selector,
+            ann.element.xpath,
+            document
+          );
+          setPopover({
+            targetEl: resolvedEl,
+            metadata: resolvedEl
+              ? extractElementMetadata(resolvedEl)
+              : ann.element,
+            instruction: ann.instruction,
+            maskText: ann.maskText,
+            editingAnnotationId: ann.id,
+          });
+          setIsDrawerOpen(false);
+        }}
+      />
+
+      {/* Figma UI3 Floating Bottom Bar */}
+      <FloatingBottomBar
+        inspectMode={state.inspectMode}
+        onToggleInspectMode={handleToggleInspectMode}
+        annotationCount={state.annotations.length}
+        isDrawerOpen={isDrawerOpen}
+        onToggleDrawer={() => setIsDrawerOpen((prev) => !prev)}
+        isMinimized={isMinimized}
+        onToggleMinimize={() => setIsMinimized((prev) => !prev)}
+        emulationConfig={emulationConfig}
+        onSetDeviceEmulation={handleSetDeviceEmulation}
+        onClearDeviceEmulation={handleClearDeviceEmulation}
+        onCopyPrompt={handleCopyPrompt}
+        isCopied={isCopied}
+      />
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div className="dpa-toast-alert" data-testid="dpa-toast-alert">
+          <span className="dpa-icon-check">✓</span>
+          <span>{toastMessage}</span>
         </div>
       )}
     </div>
