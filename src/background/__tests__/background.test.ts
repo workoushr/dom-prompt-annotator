@@ -112,6 +112,35 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     });
   });
 
+  it('re-opens overlay UI and enables inspectMode when action icon is clicked and UI was closed (isVisible: false)', async () => {
+    const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
+
+    (globalThis as Record<string, unknown>).chrome = {
+      tabs: {
+        sendMessage: sendMessageMock,
+      },
+    };
+
+    const tabUrl = 'https://example.com/closed-page';
+    // Explicitly set isVisible: false (user had closed the overlay)
+    await savePageState(tabUrl, { isVisible: false, inspectMode: false });
+
+    await handleActionClicked({
+      id: 99,
+      url: tabUrl,
+    } as chrome.tabs.Tab);
+
+    const state = await getPageState(tabUrl);
+    expect(state.isVisible).toBe(true);
+    expect(state.inspectMode).toBe(true);
+
+    expect(sendMessageMock).toHaveBeenCalledWith(99, {
+      type: 'SET_INSPECT_MODE',
+      enabled: true,
+      url: tabUrl,
+    });
+  });
+
   it('dynamically injects content.js via chrome.scripting.executeScript when sending message to an already-open tab fails', async () => {
     const sendMessageMock = vi
       .fn()

@@ -63,6 +63,8 @@ describe('debuggerManager (CDP Device Emulation)', () => {
         height: 852,
         deviceScaleFactor: 3,
         mobile: true,
+        scale: 1,
+        dontSetVisibleSize: false,
         screenOrientation: {
           angle: 0,
           type: 'portraitPrimary',
@@ -109,6 +111,8 @@ describe('debuggerManager (CDP Device Emulation)', () => {
         height: 375,
         deviceScaleFactor: 2,
         mobile: true,
+        scale: 1,
+        dontSetVisibleSize: false,
         screenOrientation: {
           angle: 90,
           type: 'landscapePrimary',
@@ -123,6 +127,38 @@ describe('debuggerManager (CDP Device Emulation)', () => {
     const savedState = getDeviceEmulationState(tabId);
     expect(savedState.width).toBe(667);
     expect(savedState.height).toBe(375);
+  });
+
+  it('rounds non-integer dimensions to positive integers', async () => {
+    const tabId = 77;
+    const config = await attachAndEmulateDevice(tabId, {
+      width: 375.4,
+      height: 666.9,
+    });
+
+    expect(config.width).toBe(375);
+    expect(config.height).toBe(667);
+    expect(sendCommandMock).toHaveBeenCalledWith(
+      { tabId: 77 },
+      'Emulation.setDeviceMetricsOverride',
+      expect.objectContaining({
+        width: 375,
+        height: 667,
+      })
+    );
+  });
+
+  it('translates "Another debugger" attach errors into friendly Japanese error message', async () => {
+    const tabId = 88;
+    attachMock.mockRejectedValueOnce(
+      new Error('Another debugger is already attached to this target')
+    );
+
+    await expect(
+      attachAndEmulateDevice(tabId, { presetId: 'iphone-se' })
+    ).rejects.toThrow(
+      '既にDevToolsまたは別のデバッガーが開いているため接続できません。DevToolsを閉じて再試行してください。'
+    );
   });
 
   it('rolls back debugger attachment and re-throws error if CDP command fails', async () => {

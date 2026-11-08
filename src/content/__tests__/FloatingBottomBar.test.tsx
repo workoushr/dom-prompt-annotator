@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FloatingBottomBar } from '../FloatingBottomBar';
+import { OVERLAY_CSS } from '../overlayStyles';
 import {
   DEFAULT_DEVICE_EMULATION_CONFIG,
   DeviceEmulationConfig,
@@ -43,6 +44,7 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       onClearDeviceEmulation: vi.fn(),
       onCopyPrompt: vi.fn(),
       isCopied: false,
+      onClose: vi.fn(),
       ...props,
     };
 
@@ -54,7 +56,7 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     return defaultProps;
   };
 
-  it('renders all 6 elements of Figma UI3 floating bottom bar in expanded state', async () => {
+  it('renders all 7 elements of Figma UI3 floating bottom bar in expanded state (including close button)', async () => {
     await renderComponent({ annotationCount: 3 });
 
     const bottomBar = container.querySelector('[data-testid="dpa-bottom-bar"]');
@@ -63,7 +65,8 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     // 1. Select toggle button
     const selectBtn = container.querySelector('[data-testid="dpa-bottom-bar-select-btn"]');
     expect(selectBtn).not.toBeNull();
-    expect(selectBtn?.textContent).toContain('選択 (Alt+S)');
+    expect(selectBtn?.textContent).toContain('選択');
+    expect(selectBtn?.textContent).not.toContain('Alt+S');
 
     // 2. Device menu button
     const deviceBtn = container.querySelector('[data-testid="dpa-bottom-bar-device-btn"]');
@@ -88,6 +91,10 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     // 6. Minimize button
     const minimizeBtn = container.querySelector('[data-testid="dpa-bottom-bar-minimize-btn"]');
     expect(minimizeBtn).not.toBeNull();
+
+    // 7. Close button
+    const closeBtn = container.querySelector('[data-testid="dpa-bottom-bar-close-btn"]');
+    expect(closeBtn).not.toBeNull();
   });
 
   it('triggers onToggleInspectMode and reflects active blue styling when inspectMode is true', async () => {
@@ -96,11 +103,13 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
 
     const selectBtn = container.querySelector('[data-testid="dpa-bottom-bar-select-btn"]') as HTMLButtonElement;
     expect(selectBtn.classList.contains('dpa-btn-select-mode--active')).toBe(true);
-    expect(selectBtn.textContent).toContain('選択中 (Selection Mode)');
+    expect(selectBtn.textContent).toContain('選択中');
+    expect(selectBtn.textContent).not.toContain('Selection Mode');
 
-    // Backward compatibility: mode pill testid contains Selection Mode
+    // Mode pill testid contains '選択中'
     const modePill = container.querySelector('[data-testid="dpa-mode-pill"]');
-    expect(modePill?.textContent).toContain('Selection Mode');
+    expect(modePill?.textContent).toContain('選択中');
+    expect(modePill?.textContent).not.toContain('Selection Mode');
 
     await act(async () => {
       selectBtn.click();
@@ -133,6 +142,8 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     // Device button shows active device info and rotate button
     const deviceBtn = container.querySelector('[data-testid="dpa-bottom-bar-device-btn"]') as HTMLButtonElement;
     expect(deviceBtn.textContent).toContain('iPhone 15 Pro (393×852)');
+    expect(container.querySelector('[data-testid="dpa-device-active-dot"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="dpa-device-active-badge"]')?.textContent).toBe('ON');
 
     const rotateBtn = container.querySelector('[data-testid="dpa-device-rotate-btn"]') as HTMLButtonElement;
     expect(rotateBtn).not.toBeNull();
@@ -150,6 +161,11 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
 
     const menu = container.querySelector('[data-testid="dpa-device-menu"]');
     expect(menu).not.toBeNull();
+    expect(menu?.textContent).toContain('デバイスサイズ');
+    expect(menu?.textContent).not.toContain('CDP Viewport');
+    expect(menu?.textContent).toContain('デスクトップ (実寸リセット)');
+    expect(menu?.textContent).toContain('縦横回転');
+    expect(menu?.textContent).not.toContain('(Orientation)');
 
     // Select iPad Mini preset
     const ipadItem = container.querySelector('[data-testid="dpa-device-preset-ipad-mini"]') as HTMLButtonElement;
@@ -241,5 +257,99 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       recBtn.click();
     });
     expect(onToggleRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('triggers onClose when close button is clicked in expanded bottom bar', async () => {
+    const onClose = vi.fn();
+    await renderComponent({ onClose });
+
+    const closeBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-close-btn"]'
+    ) as HTMLButtonElement;
+    expect(closeBtn).not.toBeNull();
+
+    await act(async () => {
+      closeBtn.click();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders close button in minimized pill and calls onClose without triggering onToggleMinimize', async () => {
+    const onClose = vi.fn();
+    const onToggleMinimize = vi.fn();
+    await renderComponent({
+      isMinimized: true,
+      annotationCount: 1,
+      onClose,
+      onToggleMinimize,
+    });
+
+    const closeBtn = container.querySelector(
+      '[data-testid="dpa-minimized-close-btn"]'
+    ) as HTMLButtonElement;
+    expect(closeBtn).not.toBeNull();
+
+    await act(async () => {
+      closeBtn.click();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onToggleMinimize).not.toHaveBeenCalled();
+  });
+
+  it('does not display [Selection Mode] in minimized pill even when inspectMode is true (Issue 7)', async () => {
+    await renderComponent({
+      isMinimized: true,
+      inspectMode: true,
+      annotationCount: 0,
+    });
+
+    const minPill = container.querySelector('[data-testid="dpa-minimized-pill"]') as HTMLDivElement;
+    expect(minPill).not.toBeNull();
+    expect(minPill.textContent).toContain('🎯 DPA (0件)');
+    expect(minPill.textContent).not.toContain('Selection Mode');
+  });
+
+  it('includes responsive max-width and media queries in stylesheet for narrow windows (Issue 4)', () => {
+    expect(OVERLAY_CSS).toContain('max-width: calc(100vw - 24px)');
+    expect(OVERLAY_CSS).toContain('@media (max-width: 640px)');
+    expect(OVERLAY_CSS).toContain('@media (max-width: 480px)');
+  });
+
+  it('displays active badge and dot, and calls onShowToast with new orientation and swapped dimensions on rotation (Issue 6)', async () => {
+    const onShowToast = vi.fn();
+    const onSetDeviceEmulation = vi.fn();
+
+    const emulatedConfig: DeviceEmulationConfig = {
+      enabled: true,
+      presetId: 'iphone-se',
+      name: 'iPhone SE',
+      width: 375,
+      height: 667,
+      deviceScaleFactor: 2,
+      mobile: true,
+      touch: true,
+      orientation: 'portrait',
+    };
+
+    await renderComponent({
+      emulationConfig: emulatedConfig,
+      onShowToast,
+      onSetDeviceEmulation,
+    });
+
+    // Check label and badges
+    const deviceBtn = container.querySelector('[data-testid="dpa-bottom-bar-device-btn"]') as HTMLButtonElement;
+    expect(deviceBtn.textContent).toContain('iPhone SE (375×667)');
+    expect(container.querySelector('[data-testid="dpa-device-active-dot"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="dpa-device-active-badge"]')?.textContent).toBe('ON');
+
+    // Rotate
+    const rotateBtn = container.querySelector('[data-testid="dpa-device-rotate-btn"]') as HTMLButtonElement;
+    await act(async () => {
+      rotateBtn.click();
+    });
+
+    expect(onShowToast).toHaveBeenCalledWith('🔄 iPhone SE (横向き: 667×375) に回転しました');
+    expect(onSetDeviceEmulation).toHaveBeenCalledWith({ orientation: 'landscape' });
   });
 });

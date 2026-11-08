@@ -3,6 +3,7 @@ import { getPageState, savePageState } from '../utils/storage';
 import {
   attachAndEmulateDevice,
   clearDeviceEmulation,
+  formatDebuggerError,
   getDeviceEmulationState,
   handleDebuggerDetach,
 } from './debuggerManager';
@@ -88,6 +89,20 @@ export async function handleActionClicked(tab: chrome.tabs.Tab): Promise<void> {
 
   if (tabUrl) {
     const currentState = await getPageState(tabUrl);
+    // If the UI was closed, clicking the action button re-opens it and enables inspectMode
+    if (currentState.isVisible === false) {
+      await savePageState(tabUrl, { isVisible: true, inspectMode: true });
+
+      if (typeof tabId === 'number' && !isRestrictedTabUrl(tabUrl)) {
+        await ensureContentScriptAndSendMessage(tabId, tabUrl, {
+          type: 'SET_INSPECT_MODE',
+          enabled: true,
+          url: tabUrl,
+        });
+      }
+      return;
+    }
+
     const nextInspect = !currentState.inspectMode;
     await savePageState(tabUrl, { inspectMode: nextInspect });
 
@@ -143,52 +158,73 @@ export function handleRuntimeMessage(
   }
 
   if (message.type === 'SET_DEVICE_EMULATION') {
-    void resolveTargetTabId(message.tabId, sender).then(async (targetTabId) => {
-      if (typeof targetTabId !== 'number') {
-        sendResponse({ ok: false, error: 'No target tab found' });
-        return;
-      }
-      try {
-        const config = await attachAndEmulateDevice(targetTabId, message.config);
-        sendResponse({ ok: true, config });
-      } catch (err: unknown) {
+    void resolveTargetTabId(message.tabId, sender)
+      .then(async (targetTabId) => {
+        if (typeof targetTabId !== 'number') {
+          sendResponse({ ok: false, error: 'No target tab found' });
+          return;
+        }
+        try {
+          const config = await attachAndEmulateDevice(targetTabId, message.config);
+          sendResponse({ ok: true, config });
+        } catch (err: unknown) {
+          sendResponse({
+            ok: false,
+            error: formatDebuggerError(err),
+          });
+        }
+      })
+      .catch((fatalErr) => {
         sendResponse({
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatDebuggerError(fatalErr),
         });
-      }
-    });
+      });
     return true;
   }
 
   if (message.type === 'CLEAR_DEVICE_EMULATION') {
-    void resolveTargetTabId(message.tabId, sender).then(async (targetTabId) => {
-      if (typeof targetTabId !== 'number') {
-        sendResponse({ ok: false, error: 'No target tab found' });
-        return;
-      }
-      try {
-        await clearDeviceEmulation(targetTabId);
-        sendResponse({ ok: true });
-      } catch (err: unknown) {
+    void resolveTargetTabId(message.tabId, sender)
+      .then(async (targetTabId) => {
+        if (typeof targetTabId !== 'number') {
+          sendResponse({ ok: false, error: 'No target tab found' });
+          return;
+        }
+        try {
+          await clearDeviceEmulation(targetTabId);
+          sendResponse({ ok: true });
+        } catch (err: unknown) {
+          sendResponse({
+            ok: false,
+            error: formatDebuggerError(err),
+          });
+        }
+      })
+      .catch((fatalErr) => {
         sendResponse({
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatDebuggerError(fatalErr),
         });
-      }
-    });
+      });
     return true;
   }
 
   if (message.type === 'GET_DEVICE_EMULATION') {
-    void resolveTargetTabId(message.tabId, sender).then((targetTabId) => {
-      if (typeof targetTabId !== 'number') {
-        sendResponse({ ok: false, error: 'No target tab found' });
-        return;
-      }
-      const config = getDeviceEmulationState(targetTabId);
-      sendResponse({ ok: true, config });
-    });
+    void resolveTargetTabId(message.tabId, sender)
+      .then((targetTabId) => {
+        if (typeof targetTabId !== 'number') {
+          sendResponse({ ok: false, error: 'No target tab found' });
+          return;
+        }
+        const config = getDeviceEmulationState(targetTabId);
+        sendResponse({ ok: true, config });
+      })
+      .catch((err) => {
+        sendResponse({
+          ok: false,
+          error: formatDebuggerError(err),
+        });
+      });
     return true;
   }
 
