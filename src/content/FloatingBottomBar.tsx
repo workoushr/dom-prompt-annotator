@@ -32,6 +32,9 @@ export interface FloatingBottomBarProps {
   onClearDeviceEmulation: () => Promise<void> | void;
   onCopyPrompt: (format?: 'markdown' | 'json') => Promise<void> | void;
   isCopied?: boolean;
+  isRecording?: boolean;
+  recordingDurationMs?: number;
+  onToggleRecording?: () => void;
 }
 
 export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
@@ -47,6 +50,9 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   onClearDeviceEmulation,
   onCopyPrompt,
   isCopied = false,
+  isRecording = false,
+  recordingDurationMs = 0,
+  onToggleRecording,
 }) => {
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [copyFormatMenuOpen, setCopyFormatMenuOpen] = useState(false);
@@ -292,18 +298,34 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
 
       <div className="dpa-divider" />
 
-      {/* 3. [🔴 REC] Placeholder (for Issue #2) */}
+      {/* 3. [🔴 REC] Recording Toggle Button */}
       <button
         type="button"
-        className="dpa-btn dpa-btn-rec"
+        className={`dpa-btn dpa-btn-rec ${
+          isRecording ? 'dpa-btn-rec--recording' : ''
+        }`}
         data-testid="dpa-bottom-bar-rec-btn"
-        title="動的UIタイムライン録画 (Issue #2 次期リリース)"
-        onClick={() => {
-          // Placeholder action
-        }}
+        title={
+          isRecording
+            ? '録画停止 & Studioを開く'
+            : '動的UIタイムライン録画開始 (Studio)'
+        }
+        onClick={onToggleRecording}
       >
-        <span className="dpa-rec-dot" />
-        <span className="dpa-btn-text">REC</span>
+        <span
+          className={`dpa-rec-dot ${
+            isRecording ? 'dpa-rec-dot--active' : ''
+          }`}
+        />
+        <span className="dpa-btn-text">
+          {isRecording
+            ? `${Math.floor(recordingDurationMs / 60000)
+                .toString()
+                .padStart(2, '0')}:${Math.floor((recordingDurationMs % 60000) / 1000)
+                .toString()
+                .padStart(2, '0')}.${Math.floor((recordingDurationMs % 1000) / 100)}`
+            : 'REC'}
+        </span>
       </button>
 
       <div className="dpa-divider" />

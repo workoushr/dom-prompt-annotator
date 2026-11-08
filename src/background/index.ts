@@ -6,6 +6,13 @@ import {
   getDeviceEmulationState,
   handleDebuggerDetach,
 } from './debuggerManager';
+import {
+  deleteStudioAnnotation,
+  getRecordingSession,
+  saveRecordingSession,
+  saveStudioAnnotation,
+  updateStudioSession,
+} from './recordingManager';
 
 const RESTRICTED_URL_PREFIXES = [
   'chrome://',
@@ -199,6 +206,114 @@ export function handleRuntimeMessage(
     return true;
   }
 
+  if (message.type === 'SAVE_RECORDING_SESSION') {
+    void (async () => {
+      try {
+        await saveRecordingSession(message.session);
+        if (message.openStudioTab) {
+          if (typeof chrome !== 'undefined' && chrome.tabs?.create && chrome.runtime?.getURL) {
+            const studioUrl = chrome.runtime.getURL(
+              `studio/index.html?sessionId=${encodeURIComponent(message.session.sessionId)}`
+            );
+            await chrome.tabs.create({ url: studioUrl });
+          }
+        }
+        sendResponse({ ok: true, sessionId: message.session.sessionId });
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'GET_RECORDING_SESSION') {
+    void (async () => {
+      try {
+        const session = await getRecordingSession(message.sessionId);
+        if (session) {
+          sendResponse({ ok: true, session });
+        } else {
+          sendResponse({ ok: false, error: 'Session not found' });
+        }
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'SAVE_STUDIO_ANNOTATION') {
+    void (async () => {
+      try {
+        const session = await saveStudioAnnotation(
+          message.sessionId,
+          message.annotation
+        );
+        if (session) {
+          sendResponse({ ok: true, session });
+        } else {
+          sendResponse({ ok: false, error: 'Session not found' });
+        }
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'DELETE_STUDIO_ANNOTATION') {
+    void (async () => {
+      try {
+        const session = await deleteStudioAnnotation(
+          message.sessionId,
+          message.annotationId
+        );
+        if (session) {
+          sendResponse({ ok: true, session });
+        } else {
+          sendResponse({ ok: false, error: 'Session not found' });
+        }
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'UPDATE_STUDIO_SESSION') {
+    void (async () => {
+      try {
+        const session = await updateStudioSession(
+          message.sessionId,
+          message.patch
+        );
+        if (session) {
+          sendResponse({ ok: true, session });
+        } else {
+          sendResponse({ ok: false, error: 'Session not found' });
+        }
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === 'FORWARD_TO_ACTIVE_TAB' && message.payload) {
     if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
       void chrome.tabs
@@ -232,6 +347,11 @@ export function handleRuntimeMessage(
     'SET_DEVICE_EMULATION',
     'CLEAR_DEVICE_EMULATION',
     'GET_DEVICE_EMULATION',
+    'SAVE_RECORDING_SESSION',
+    'GET_RECORDING_SESSION',
+    'SAVE_STUDIO_ANNOTATION',
+    'DELETE_STUDIO_ANNOTATION',
+    'UPDATE_STUDIO_SESSION',
   ];
   if (!sender?.tab && !nonForwardedTypes.includes(message.type)) {
     if (typeof chrome !== 'undefined' && chrome.tabs?.query) {

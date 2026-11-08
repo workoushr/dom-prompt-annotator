@@ -17,6 +17,7 @@ import {
 } from '../utils/promptFormatter';
 import { FloatingBottomBar } from './FloatingBottomBar';
 import { AnnotationDrawer } from './AnnotationDrawer';
+import { RecordingController } from './recordingController';
 import {
   applyMaskingToAnnotation,
   findMaskedElementsOnPage,
@@ -176,14 +177,27 @@ export const OverlayApp: React.FC = () => {
   );
   const [isCopied, setIsCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
 
   const overlayRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const recordingControllerRef = useRef<RecordingController | null>(null);
   const stateRef = useRef<PageAnnotationState>(state);
   stateRef.current = state;
 
   const popoverRef = useRef<PopoverState | null>(popover);
   popoverRef.current = popover;
+
+  // Initialize recording controller
+  useEffect(() => {
+    recordingControllerRef.current = new RecordingController({
+      getMaskingConfig: () => stateRef.current.maskingConfig,
+      getGlobalInstruction: () => stateRef.current.globalInstruction,
+      onDurationTick: (ms) => setRecordingDurationMs(ms),
+      onStatusChange: (rec) => setIsRecording(rec),
+    });
+  }, []);
 
   // Load initial device emulation state if available
   useEffect(() => {
@@ -347,12 +361,24 @@ export const OverlayApp: React.FC = () => {
           : item
       );
     } else {
+      const rec = recordingControllerRef.current;
+      const isRec = rec && rec.getIsRecording();
+      const timestampMs = isRec ? rec.getDurationMs() : undefined;
+      const triggerContext = isRec
+        ? rec
+            .getActionLogs()
+            .filter((log) => log.offsetMs <= (timestampMs ?? 0))
+            .slice(-2)
+        : undefined;
+
       const newItem: AnnotationItem = {
         id: currentAnnotations.length + 1,
         instruction: currentPopover.instruction.trim(),
         maskText: currentPopover.maskText,
         createdAt: new Date().toISOString(),
         element: rawMetadata,
+        timestampMs,
+        triggerContext,
       };
       nextAnnotations = [...currentAnnotations, newItem].map((item, idx) => ({
         ...item,
@@ -487,6 +513,40 @@ export const OverlayApp: React.FC = () => {
     },
     []
   );
+
+  const handleToggleRecording = useCallback(async () => {
+    const controller = recordingControllerRef.current;
+    if (!controller) return;
+
+    if (controller.getIsRecording()) {
+      const session = controller.stopRecording({
+        annotations: stateRef.current.annotations,
+        maskingConfig: stateRef.current.maskingConfig,
+        globalInstruction: stateRef.current.globalInstruction,
+      });
+      setIsRecording(false);
+      setRecordingDurationMs(0);
+      setToastMessage('録画完了: Studioタブを起動しています...');
+      setTimeout(() => setToastMessage(null), 3000);
+
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        try {
+          chrome.runtime.sendMessage({
+            type: 'SAVE_RECORDING_SESSION',
+            session,
+            openStudioTab: true,
+          });
+        } catch {
+          // Ignore messaging errors
+        }
+      }
+    } else {
+      controller.startRecording();
+      setIsRecording(true);
+      setToastMessage('🔴 録画中: アクションとDOM変化を記録しています');
+      setTimeout(() => setToastMessage(null), 2500);
+    }
+  }, []);
 
   const handleUpdateGlobalInstruction = useCallback(
     async (globalInstruction: string) => {
@@ -935,6 +995,23 @@ export const OverlayApp: React.FC = () => {
         case 'DEVICE_EMULATION_UPDATED': {
           if (message.config) {
             setEmulationConfig(message.config);
+          }
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        case 'START_RECORDING': {
+          if (!recordingControllerRef.current?.getIsRecording()) {
+            recordingControllerRef.current?.startRecording();
+            setIsRecording(true);
+          }
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        case 'STOP_RECORDING': {
+          if (recordingControllerRef.current?.getIsRecording()) {
+            void handleToggleRecording();
           }
           sendResponse({ ok: true });
           return false;
@@ -1411,6 +1488,9 @@ export const OverlayApp: React.FC = () => {
         onClearDeviceEmulation={handleClearDeviceEmulation}
         onCopyPrompt={handleCopyPrompt}
         isCopied={isCopied}
+        isRecording={isRecording}
+        recordingDurationMs={recordingDurationMs}
+        onToggleRecording={handleToggleRecording}
       />
 
       {/* Floating Toast Notification */}

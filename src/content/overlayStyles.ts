@@ -290,6 +290,14 @@ export const OVERLAY_CSS = `
     color: #f43f5e;
   }
 
+  .dpa-btn-rec--recording {
+    background: rgba(244, 63, 94, 0.25);
+    border-color: #f43f5e;
+    color: #ffffff;
+    font-family: monospace;
+    font-weight: 600;
+  }
+
   .dpa-rec-dot {
     width: 7px;
     height: 7px;
@@ -299,9 +307,15 @@ export const OVERLAY_CSS = `
     animation: dpaPulse 1.8s infinite ease-in-out;
   }
 
+  .dpa-rec-dot--active {
+    background: #ff1a40;
+    box-shadow: 0 0 10px #ff1a40;
+    animation: dpaPulse 0.8s infinite ease-in-out;
+  }
+
   @keyframes dpaPulse {
     0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(0.85); }
+    50% { opacity: 0.4; transform: scale(0.8); }
   }
 
   /* 4. Annotations Drawer Button */
