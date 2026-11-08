@@ -39,7 +39,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(isRestrictedTabUrl('http://localhost:3000/app')).toBe(false);
   });
 
-  it('configures sidePanel.setPanelBehavior({ openPanelOnActionClick: true }) on install', async () => {
+  it('configures sidePanel.setPanelBehavior({ openPanelOnActionClick: false }) on install', async () => {
     const setPanelBehaviorMock = vi.fn().mockResolvedValue(undefined);
     let installedCallback: (() => void) | null = null;
 
@@ -66,7 +66,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
 
     registerBackgroundListeners();
     expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: true,
+      openPanelOnActionClick: false,
     });
 
     setPanelBehaviorMock.mockClear();
@@ -74,11 +74,11 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     installedCallback!();
     await configureSidePanelBehavior();
     expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: true,
+      openPanelOnActionClick: false,
     });
   });
 
-  it('opens the Side Panel, enables inspectMode in storage, and sends SET_INSPECT_MODE when action icon is clicked', async () => {
+  it('toggles inspectMode in storage and sends SET_INSPECT_MODE without opening side panel when action icon is clicked', async () => {
     const openSidePanelMock = vi.fn().mockResolvedValue(undefined);
     const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
@@ -92,12 +92,15 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     };
 
     const tabUrl = 'https://example.com/products?page=2';
+    // Explicitly start from inspectMode: false to verify toggling to true
+    await savePageState(tabUrl, { inspectMode: false });
+
     await handleActionClicked({
       id: 42,
       url: tabUrl,
     } as chrome.tabs.Tab);
 
-    expect(openSidePanelMock).toHaveBeenCalledWith({ tabId: 42 });
+    expect(openSidePanelMock).not.toHaveBeenCalled();
 
     const state = await getPageState(tabUrl);
     expect(state.inspectMode).toBe(true);

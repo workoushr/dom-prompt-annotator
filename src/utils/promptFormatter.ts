@@ -339,7 +339,7 @@ export function formatStudioPromptMarkdown(
     `- **録画時間**: ${(sanitized.durationMs / 1000).toFixed(1)}s (${sanitized.durationMs}ms)`
   );
   lines.push(
-    `- **Viewport**: ${sanitized.viewport.width}x${sanitized.viewport.height}`
+    `- **Viewport**: ${sanitized.viewport ? `${sanitized.viewport.width}x${sanitized.viewport.height}` : '(未設定)'}`
   );
   lines.push(
     `- **テキストマスキング (maskAllText)**: ${isMaskAll ? 'ON (全テキスト本文を[MASKED]隠蔽中)' : 'OFF'}`

@@ -43,7 +43,7 @@ export async function configureSidePanelBehavior(): Promise<void> {
       chrome.sidePanel &&
       typeof chrome.sidePanel.setPanelBehavior === 'function'
     ) {
-      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
     }
   } catch {
     // Ignore errors outside Chrome extension environment or unsupported browser versions
@@ -85,20 +85,6 @@ export async function ensureContentScriptAndSendMessage(
 export async function handleActionClicked(tab: chrome.tabs.Tab): Promise<void> {
   const tabId = tab?.id;
   const tabUrl = tab?.url;
-
-  if (typeof tabId === 'number') {
-    try {
-      if (
-        typeof chrome !== 'undefined' &&
-        chrome.sidePanel &&
-        typeof chrome.sidePanel.open === 'function'
-      ) {
-        await chrome.sidePanel.open({ tabId });
-      }
-    } catch {
-      // Ignore if sidePanel.open fails
-    }
-  }
 
   if (tabUrl) {
     const currentState = await getPageState(tabUrl);

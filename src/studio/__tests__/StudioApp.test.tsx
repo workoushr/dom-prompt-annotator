@@ -21,7 +21,12 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     });
   });
 
+  const initialLocation = window.location;
+
   afterEach(async () => {
+    delete (window as any).location;
+    (window as any).location = initialLocation;
+    delete (globalThis as Record<string, unknown>).chrome;
     if (root) {
       await act(async () => {
         root?.unmount();
@@ -37,6 +42,17 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
       root = createRoot(container);
       root.render(<StudioApp />);
     });
+  };
+
+  const getReplayedElement = (selector: string): HTMLElement | null => {
+    const iframe = container.querySelector<HTMLIFrameElement>(
+      '[data-testid="studio-replayed-iframe"]'
+    );
+    if (iframe?.contentDocument) {
+      const el = iframe.contentDocument.querySelector(selector);
+      if (el) return el as HTMLElement;
+    }
+    return container.querySelector(selector);
   };
 
   it('renders StudioApp with header, canvas, timeline bar, and panels', async () => {
@@ -60,7 +76,11 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     const artboard = container.querySelector('[data-testid="studio-artboard"]');
     expect(artboard).not.toBeNull();
 
-    const ctaBtn = container.querySelector('[data-testid="replayed-cta-button"]');
+    const iframe = container.querySelector('[data-testid="studio-replayed-iframe"]');
+    expect(iframe).not.toBeNull();
+
+    const ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
+    expect(ctaBtn).not.toBeNull();
     expect(ctaBtn?.textContent).toContain('プロプランにアップグレード');
 
     // Panels & timeline
@@ -75,10 +95,10 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     const toggleBtn = container.querySelector<HTMLButtonElement>(
       '[data-testid="studio-mask-all-text-toggle"]'
     );
-    const ctaBtn = container.querySelector('[data-testid="replayed-cta-button"]');
     const titleEl = container.querySelector('[data-testid="studio-session-title"]');
 
     // Initially unmasked
+    let ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
     expect(ctaBtn?.textContent).toContain('プロプランにアップグレード');
     expect(titleEl?.textContent).toContain('CloudMetrics E2E Session');
 
@@ -88,6 +108,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     });
 
     // Replayer texts must be masked with [MASKED]
+    ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
     expect(ctaBtn?.textContent).toContain('[MASKED]');
     expect(titleEl?.textContent).toContain('[MASKED SESSION]');
 
@@ -95,6 +116,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     await act(async () => {
       toggleBtn?.click();
     });
+    ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
     expect(ctaBtn?.textContent).toContain('プロプランにアップグレード');
   });
 
@@ -146,9 +168,9 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
   it('opens inspect popover on replayed element click and saves new annotation', async () => {
     await renderComponent();
 
-    const ctaBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="replayed-cta-button"]'
-    );
+    const ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
+    expect(ctaBtn).not.toBeNull();
+
     await act(async () => {
       ctaBtn?.click();
     });
@@ -196,5 +218,70 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     const promptArg = (navigator.clipboard.writeText as any).mock.calls[0][0];
     expect(promptArg).toContain('# 動的UIタイムラインリプレイ修正指示');
     expect(promptArg).toContain('直前の操作トリガー');
+  });
+
+  it('renders iframe when session has initialDomSnapshot', async () => {
+    delete (window as any).location;
+    window.location = new URL('https://example.com/studio.html?sessionId=test-session') as any;
+
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: vi.fn((msg: any, cb: any) => {
+          if (msg.type === 'GET_RECORDING_SESSION') {
+            cb({
+              ok: true,
+              session: {
+                sessionId: 'test-session',
+                url: 'https://example.com/app',
+                title: 'Recorded Real Session',
+                createdAt: new Date().toISOString(),
+                durationMs: 5000,
+                initialDomSnapshot: '<div id="app-root"><button id="real-btn">送信</button></div>',
+                annotations: [],
+                actionLogs: [],
+              },
+            });
+          }
+        }),
+      },
+    };
+
+    await renderComponent();
+
+    const iframe = container.querySelector('[data-testid="studio-replayed-iframe"]');
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute('srcDoc')).toContain('id="app-root"');
+  });
+
+  it('renders elegant empty state when initialDomSnapshot is missing', async () => {
+    delete (window as any).location;
+    window.location = new URL('https://example.com/studio.html?sessionId=empty-session') as any;
+
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: vi.fn((msg: any, cb: any) => {
+          if (msg.type === 'GET_RECORDING_SESSION') {
+            cb({
+              ok: true,
+              session: {
+                sessionId: 'empty-session',
+                url: 'https://example.com/empty',
+                title: 'Empty Snapshot Session',
+                createdAt: new Date().toISOString(),
+                durationMs: 3000,
+                initialDomSnapshot: '',
+                annotations: [],
+                actionLogs: [],
+              },
+            });
+          }
+        }),
+      },
+    };
+
+    await renderComponent();
+
+    expect(container.querySelector('[data-testid="studio-empty-snapshot"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="studio-replayed-iframe"]')).toBeNull();
   });
 });
