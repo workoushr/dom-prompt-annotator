@@ -25,11 +25,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Run tests
-        run: npm test
-
       - name: Build extension
         run: npm run build
+
+      - name: Run tests
+        run: npm test
 
       - name: Verify build encoding
         run: npm run verify-dist

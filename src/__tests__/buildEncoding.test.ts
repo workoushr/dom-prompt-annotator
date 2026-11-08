@@ -1,12 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { checkDistNoncharacters, sanitizeDistNoncharacters } from '../../scripts/verify-dist.mjs';
 
 describe('Build output character encoding verification (Issue #13)', () => {
   const rootDir = path.resolve(__dirname, '../..');
   const distDir = path.resolve(rootDir, 'dist');
   const contentJsPath = path.resolve(distDir, 'content.js');
+
+  beforeAll(() => {
+    if (!fs.existsSync(contentJsPath)) {
+      execSync('npm run build', { cwd: rootDir, stdio: 'pipe' });
+    }
+  }, 60000);
 
   it('ensures dist/content.js does not contain raw noncharacter byte sequences (EF BF BE or EF BF BF)', () => {
     expect(fs.existsSync(contentJsPath)).toBe(true);
