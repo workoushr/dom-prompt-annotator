@@ -25,7 +25,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
 
   afterEach(async () => {
     delete (window as any).location;
-    window.location = initialLocation;
+    (window as any).location = initialLocation;
     delete (globalThis as Record<string, unknown>).chrome;
     if (root) {
       await act(async () => {
