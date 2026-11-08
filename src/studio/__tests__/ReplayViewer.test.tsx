@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ReplayViewer, maskRrwebEvents } from '../ReplayViewer';
+import { ReplayViewer, maskRrwebEvents, attachIframeListeners } from '../ReplayViewer';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -169,6 +169,50 @@ describe('ReplayViewer (src/studio/ReplayViewer.tsx)', () => {
 
       const emptyEl = container.querySelector('[data-testid="studio-empty-snapshot"]');
       expect(emptyEl).not.toBeNull();
+    });
+  });
+
+  describe('attachIframeListeners', () => {
+    it('attaches mouseover, mouseout, and click listeners, and cleans up on unmount', () => {
+      const doc = document.implementation.createHTMLDocument('test');
+      const btn = doc.createElement('button');
+      btn.id = 'sample-btn';
+      btn.textContent = 'Click me';
+      btn.setAttribute('data-component', 'SampleComponent');
+      doc.body.appendChild(btn);
+
+      const onSelectElement = vi.fn();
+      const cleanup = attachIframeListeners(doc, {
+        maskAllText: false,
+        onSelectElement,
+      });
+
+      // Hover adds class
+      btn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(btn.classList.contains('dpa-hover-target')).toBe(true);
+
+      // Mouseout removes class
+      btn.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+      expect(btn.classList.contains('dpa-hover-target')).toBe(false);
+
+      // Click triggers onSelectElement
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect(onSelectElement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tagName: 'button',
+          textContent: 'Click me',
+          componentName: 'SampleComponent',
+        })
+      );
+
+      // Cleanup
+      cleanup?.();
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect(onSelectElement).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns undefined when doc is null or not provided', () => {
+      expect(attachIframeListeners({} as any)).toBeUndefined();
     });
   });
 });

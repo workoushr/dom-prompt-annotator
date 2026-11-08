@@ -13,7 +13,8 @@ import {
   formatTimestampOffset,
 } from '../utils/promptFormatter';
 import { TimelineBar } from './TimelineBar';
-import { ReplayViewer, SelectedElementData } from './ReplayViewer';
+import { ReplayViewer, SelectedElementData, attachIframeListeners } from './ReplayViewer';
+export { attachIframeListeners };
 import {
   Lock,
   Unlock,

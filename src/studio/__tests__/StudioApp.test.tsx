@@ -447,4 +447,70 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     const select = container.querySelector<HTMLSelectElement>('[data-testid="studio-device-select"]');
     expect(select?.value).toBe('ipad-mini');
   });
+
+  it('opens inspect popover and saves annotation after asynchronous iframe load event', async () => {
+    await renderComponent();
+
+    const iframe = container.querySelector<HTMLIFrameElement>(
+      '[data-testid="studio-replayed-iframe"]'
+    );
+    expect(iframe).not.toBeNull();
+
+    // Simulate browser srcDoc document reconstruction & load event
+    if (iframe?.contentDocument) {
+      iframe.contentDocument.documentElement.innerHTML =
+        '<!DOCTYPE html><html><body><div class="card"><button id="upgrade-cta" class="cta-button" data-component="HeroPricingCard" data-testid="replayed-cta-button">プロプランにアップグレード</button></div></body></html>';
+
+      // Dispatch load event to simulate browser completing srcDoc loading
+      await act(async () => {
+        iframe.dispatchEvent(new Event('load'));
+      });
+    }
+
+    const ctaBtn = getReplayedElement('[data-testid="replayed-cta-button"]');
+    expect(ctaBtn).not.toBeNull();
+
+    // Mouseover adds hover highlight
+    await act(async () => {
+      ctaBtn?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    expect(ctaBtn?.classList.contains('dpa-hover-target')).toBe(true);
+
+    // Click opens inspect card popover
+    await act(async () => {
+      ctaBtn?.click();
+    });
+
+    const popover = container.querySelector('[data-testid="studio-element-popover"]');
+    expect(popover).not.toBeNull();
+
+    const input = container.querySelector<HTMLTextAreaElement>(
+      '[data-testid="popover-instruction-input"]'
+    );
+    expect(input).not.toBeNull();
+
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value'
+    )?.set;
+    await act(async () => {
+      if (input) {
+        nativeValueSetter?.call(input, '非同期ロード後アノテーション保存テスト指示');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+
+    const saveBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="popover-save-btn"]'
+    );
+    await act(async () => {
+      saveBtn?.click();
+    });
+
+    // Popover closes and annotation is added to session
+    expect(container.querySelector('[data-testid="studio-element-popover"]')).toBeNull();
+    const leftPanel = container.querySelector('[data-testid="studio-left-panel"]');
+    expect(leftPanel?.textContent).toContain('非同期ロード後アノテーション保存テスト指示');
+  });
 });
