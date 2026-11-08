@@ -231,19 +231,34 @@ export function sanitizeRecordingSessionForExport(
     (logs || []).map((log) => {
       let summary = log.summary;
       let targetLabel = log.targetLabel;
+      let inputValue = log.inputValue;
+      let elementSnapshot = log.elementSnapshot;
 
       if (isMaskAll) {
         targetLabel = targetLabel ? '[MASKED]' : undefined;
+        inputValue = inputValue ? '[MASKED]' : undefined;
         summary = summary.replace(/"([^"]*)"/g, '"[MASKED]"');
+        if (elementSnapshot?.textContent) {
+          elementSnapshot = { ...elementSnapshot, textContent: '[MASKED]' };
+        }
       } else if (autoPII) {
         targetLabel = targetLabel ? maskPII(targetLabel) : undefined;
+        inputValue = inputValue ? maskPII(inputValue) : undefined;
         summary = maskPII(summary);
+        if (elementSnapshot?.textContent) {
+          elementSnapshot = {
+            ...elementSnapshot,
+            textContent: maskPII(elementSnapshot.textContent),
+          };
+        }
       }
 
       return {
         ...log,
         targetLabel,
+        inputValue,
         summary,
+        elementSnapshot,
       };
     });
 

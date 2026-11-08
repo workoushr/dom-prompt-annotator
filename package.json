@@ -1,12 +1,13 @@
 {
   "name": "dom-prompt-annotator",
   "private": true,
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0-beta.4",
   "type": "module",
   "description": "Chrome Extension (Manifest V3) to inspect DOM elements, attach numbered instructions, mask sensitive data, and export AI-ready prompts.",
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build.mjs",
+    "verify-dist": "node scripts/verify-dist.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -14,7 +15,8 @@
   "dependencies": {
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "rrweb": "^2.2.1"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.278",

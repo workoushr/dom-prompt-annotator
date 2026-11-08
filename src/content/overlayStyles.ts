@@ -63,6 +63,8 @@ export const OVERLAY_CSS = `
     bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
+    max-width: calc(100vw - 24px);
+    box-sizing: border-box;
     height: 44px;
     display: flex;
     align-items: center;
@@ -78,6 +80,31 @@ export const OVERLAY_CSS = `
     z-index: 2147483646;
     user-select: none;
     transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+  }
+
+  @media (max-width: 720px) {
+    .dpa-bottom-bar {
+      gap: 4px;
+      padding: 4px 6px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .dpa-bottom-bar {
+      gap: 3px;
+      padding: 3px 5px;
+      height: 40px;
+      border-radius: 12px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .dpa-bottom-bar {
+      gap: 2px;
+      padding: 2px 4px;
+      max-width: calc(100vw - 12px);
+      bottom: 8px;
+    }
   }
 
   .dpa-divider {
@@ -179,6 +206,18 @@ export const OVERLAY_CSS = `
     white-space: nowrap;
     font-size: 11px;
     font-weight: 500;
+  }
+
+  .dpa-device-badge {
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: #0d99ff;
+    color: #ffffff;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
   }
 
   .dpa-chevron {
@@ -392,6 +431,83 @@ export const OVERLAY_CSS = `
     background: rgba(255, 255, 255, 0.1);
   }
 
+  /* 7. Close Button */
+  .dpa-btn-close {
+    width: 28px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+    color: #999999;
+  }
+
+  .dpa-btn-close:hover {
+    color: #ffffff;
+    background: rgba(239, 68, 68, 0.2);
+  }
+
+  @media (max-width: 720px) {
+    .dpa-btn {
+      padding: 0 7px;
+      gap: 4px;
+      font-size: 11.5px;
+    }
+    .dpa-btn-device {
+      max-width: 140px;
+    }
+    .dpa-divider {
+      margin: 0 1px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .dpa-btn {
+      padding: 0 5px;
+      gap: 4px;
+      font-size: 11px;
+      height: 30px;
+    }
+    .dpa-btn-text {
+      font-size: 11px;
+    }
+    .dpa-btn-device {
+      max-width: 110px;
+    }
+    .dpa-btn-rotate {
+      width: 24px;
+      height: 30px;
+    }
+    .dpa-btn-copy-format-toggle {
+      width: 20px;
+    }
+    .dpa-btn-minimize,
+    .dpa-btn-close {
+      width: 24px;
+      height: 30px;
+    }
+    .dpa-divider {
+      margin: 0;
+      height: 14px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .dpa-btn {
+      padding: 0 4px;
+      gap: 3px;
+      font-size: 10px;
+    }
+    .dpa-btn-text {
+      font-size: 10px;
+    }
+    .dpa-btn-device {
+      max-width: 80px;
+    }
+    .dpa-btn-minimize,
+    .dpa-btn-close {
+      width: 22px;
+    }
+  }
+
   /* ========================================================================= */
   /* MINIMIZED FAB PILL                                                        */
   /* ========================================================================= */
@@ -451,6 +567,29 @@ export const OVERLAY_CSS = `
 
   .dpa-minimized-expand-btn:hover {
     background: rgba(255, 255, 255, 0.18);
+  }
+
+  .dpa-minimized-close-btn {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    color: #999999;
+    font-size: 11px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .dpa-minimized-close-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+    color: #ffffff;
+    border-color: rgba(239, 68, 68, 0.4);
   }
 
   /* Legacy Pill fallback for backwards compatibility */

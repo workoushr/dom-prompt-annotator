@@ -63,6 +63,8 @@ export interface UserActionLogEntry {
   targetSelector: string;
   targetLabel?: string;
   summary: string;
+  inputValue?: string;
+  scrollPosition?: { x: number; y: number };
   elementSnapshot?: {
     tagName: string;
     id?: string;
@@ -120,6 +122,7 @@ export interface ExportPayload {
 export interface PageAnnotationState {
   urlKey: string;
   inspectMode: boolean;
+  isVisible?: boolean;
   globalInstruction: string;
   maskingConfig: MaskingConfig;
   annotations: AnnotationItem[];
@@ -213,6 +216,8 @@ export type ExtensionMessage =
   | { type: 'GET_PAGE_STATE'; url?: string }
   | { type: 'PAGE_STATE_UPDATED'; state: PageAnnotationState }
   | { type: 'SET_INSPECT_MODE'; enabled: boolean; url?: string }
+  | { type: 'TOGGLE_OVERLAY'; visible?: boolean; url?: string }
+  | { type: 'SET_OVERLAY_VISIBLE'; visible: boolean; url?: string }
   | {
       type: 'ADD_ANNOTATION';
       element: ElementMetadata;

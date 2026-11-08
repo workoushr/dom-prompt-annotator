@@ -300,7 +300,7 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(inspectToggleBtn.textContent).toContain('選択モード (Inspect ON)');
 
     const modePill = overlayMount.querySelector('[data-testid="dpa-mode-pill"]');
-    expect(modePill?.textContent).toContain('Selection Mode');
+    expect(modePill?.textContent).toContain('選択中');
 
     // =========================================================================
     // Step 2: Click inner <span> -> Popover opens -> Step up to parent <button> -> Enter instruction -> Save

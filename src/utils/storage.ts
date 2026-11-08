@@ -52,6 +52,7 @@ export function createDefaultPageState(url: string): PageAnnotationState {
   return {
     urlKey,
     inspectMode: true,
+    isVisible: true,
     globalInstruction: '',
     maskingConfig: {
       ...DEFAULT_MASKING_CONFIG,
@@ -126,6 +127,10 @@ function sanitizePageState(
       typeof raw.inspectMode === 'boolean'
         ? raw.inspectMode
         : defaults.inspectMode,
+    isVisible:
+      typeof raw.isVisible === 'boolean'
+        ? raw.isVisible
+        : defaults.isVisible,
     globalInstruction:
       typeof raw.globalInstruction === 'string'
         ? raw.globalInstruction
