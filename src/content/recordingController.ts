@@ -5,6 +5,7 @@ import {
 } from '../types/annotation';
 import { generateCssSelector } from './domExtractor';
 import { SHADOW_HOST_ID } from '../utils/masker';
+import { record } from 'rrweb';
 
 export interface RecordingControllerOptions {
   getMaskingConfig?: () => MaskingConfig;
@@ -20,6 +21,9 @@ export class RecordingController {
   private actionLogs: UserActionLogEntry[] = [];
   private mutationObserver: MutationObserver | null = null;
   private initialDomSnapshot = '';
+  private rrwebStopFn: (() => void) | null = null;
+  private rrwebEvents: any[] = [];
+  private lastScrollTime = 0;
   private options: RecordingControllerOptions;
 
   constructor(options: RecordingControllerOptions = {}) {
@@ -64,10 +68,31 @@ export class RecordingController {
       this.initialDomSnapshot = '';
     }
 
+    // Start rrweb record session
+    try {
+      this.rrwebEvents = [];
+      if (typeof record === 'function') {
+        const hasCanvas =
+          typeof HTMLCanvasElement !== 'undefined' &&
+          typeof CanvasRenderingContext2D !== 'undefined';
+        this.rrwebStopFn =
+          record({
+            emit: (event) => {
+              this.rrwebEvents.push(event);
+            },
+            blockSelector: `#${SHADOW_HOST_ID}`,
+            recordCanvas: hasCanvas,
+          }) || null;
+      }
+    } catch (err) {
+      console.warn('[DPA] rrweb record failed to initialize:', err);
+    }
+
     // Attach user action listeners
     if (typeof window !== 'undefined') {
       window.addEventListener('click', this.handleClickCapture, true);
       window.addEventListener('input', this.handleInputCapture, true);
+      window.addEventListener('scroll', this.handleScrollCapture, true);
     }
 
     // Start MutationObserver for dynamic UI (toasts, modals, dropdowns)
@@ -112,10 +137,21 @@ export class RecordingController {
     const durationMs = Math.max(100, Date.now() - this.startTime);
     this.isRecording = false;
 
+    // Stop rrweb recording
+    if (this.rrwebStopFn) {
+      try {
+        this.rrwebStopFn();
+      } catch {
+        // ignore
+      }
+      this.rrwebStopFn = null;
+    }
+
     // Cleanup listeners and observers
     if (typeof window !== 'undefined') {
       window.removeEventListener('click', this.handleClickCapture, true);
       window.removeEventListener('input', this.handleInputCapture, true);
+      window.removeEventListener('scroll', this.handleScrollCapture, true);
       if (this.timerId !== null) {
         window.clearInterval(this.timerId);
         this.timerId = null;
@@ -159,7 +195,7 @@ export class RecordingController {
       viewport,
       globalInstruction,
       maskingConfig,
-      rrwebEvents: [],
+      rrwebEvents: [...this.rrwebEvents],
       actionLogs: [...this.actionLogs],
       annotations: extraData?.annotations ? [...extraData.annotations] : [],
       initialDomSnapshot: this.initialDomSnapshot,
@@ -221,13 +257,46 @@ export class RecordingController {
     const offsetMs = Math.max(0, Date.now() - this.startTime);
     const selector = generateCssSelector(target);
     const tag = (target.tagName || 'INPUT').toLowerCase();
+    const inputVal =
+      target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+        ? target.value
+        : undefined;
+    const previewVal = inputVal ? ` "${inputVal.slice(0, 20)}"` : '';
 
     this.actionLogs.push({
       id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       offsetMs,
       kind: 'input',
       targetSelector: selector,
-      summary: `入力操作: <${tag}> (\`${selector}\`)`,
+      inputValue: inputVal,
+      summary: `入力操作: <${tag}> (\`${selector}\`)${previewVal}`,
+      elementSnapshot: {
+        tagName: tag,
+        id: target.id || undefined,
+        className: target.className || undefined,
+        textContent: inputVal,
+      },
+    });
+  };
+
+  private handleScrollCapture = (): void => {
+    if (!this.isRecording) return;
+    const now = Date.now();
+    // Throttle 300ms
+    if (now - this.lastScrollTime < 300) return;
+    this.lastScrollTime = now;
+
+    const offsetMs = Math.max(0, now - this.startTime);
+    const scrollX = typeof window !== 'undefined' ? window.scrollX || window.pageXOffset || 0 : 0;
+    const scrollY = typeof window !== 'undefined' ? window.scrollY || window.pageYOffset || 0 : 0;
+
+    this.actionLogs.push({
+      id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      offsetMs,
+      kind: 'scroll',
+      targetSelector: 'window',
+      summary: `スクロール: (X: ${Math.round(scrollX)}px, Y: ${Math.round(scrollY)}px)`,
+      scrollPosition: { x: scrollX, y: scrollY },
     });
   };
 

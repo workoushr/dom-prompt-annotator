@@ -128,7 +128,7 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
       '[data-testid="timeline-play-pause-btn"]'
     );
     const timeDisplay = container.querySelector('[data-testid="timeline-time-display"]');
-    expect(timeDisplay?.textContent).toContain('00:03.200');
+    expect(timeDisplay?.textContent).toContain('00:00.000');
 
     // Click play
     await act(async () => {
@@ -139,6 +139,8 @@ describe('StudioApp (src/studio/StudioApp.tsx)', () => {
     await act(async () => {
       vi.advanceTimersByTime(200);
     });
+
+    expect(timeDisplay?.textContent).toContain('00:00.200');
 
     // Click pause
     await act(async () => {
