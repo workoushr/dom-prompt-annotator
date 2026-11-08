@@ -40,6 +40,18 @@ export interface FloatingBottomBarProps {
   onShowToast?: (message: string) => void;
 }
 
+export const isInsideRef = (
+  ref: React.RefObject<HTMLElement | null>,
+  e: MouseEvent
+): boolean => {
+  if (!ref.current) return false;
+  if (typeof e.composedPath === 'function') {
+    return e.composedPath().includes(ref.current);
+  }
+  const target = e.target as Node;
+  return ref.current.contains(target);
+};
+
 export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   inspectMode,
   onToggleInspectMode,
@@ -67,16 +79,15 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   // Close menus on outside click within shadow DOM
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as Node;
       if (
         deviceMenuRef.current &&
-        !deviceMenuRef.current.contains(target)
+        !isInsideRef(deviceMenuRef, e)
       ) {
         setDeviceMenuOpen(false);
       }
       if (
         copyMenuRef.current &&
-        !copyMenuRef.current.contains(target)
+        !isInsideRef(copyMenuRef, e)
       ) {
         setCopyFormatMenuOpen(false);
       }
