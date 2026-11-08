@@ -12,10 +12,12 @@ import {
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
+import { resetDebuggerManagerForTests } from '../debuggerManager';
 
 describe('Background Service Worker (src/background/index.ts)', () => {
   beforeEach(() => {
     resetMemoryStoreForTests();
+    resetDebuggerManagerForTests();
   });
 
   afterEach(() => {
@@ -217,5 +219,104 @@ describe('Background Service Worker (src/background/index.ts)', () => {
       id: 1,
     });
     expect(sendResponseForForward).toHaveBeenCalledWith({ scrolled: true });
+  });
+
+  it('routes SET_DEVICE_EMULATION, GET_DEVICE_EMULATION, and CLEAR_DEVICE_EMULATION messages', async () => {
+    const attachMock = vi.fn().mockResolvedValue(undefined);
+    const sendCommandMock = vi.fn().mockResolvedValue({});
+    const detachMock = vi.fn().mockResolvedValue(undefined);
+    const tabsSendMessageMock = vi.fn().mockResolvedValue(undefined);
+
+    (globalThis as Record<string, unknown>).chrome = {
+      debugger: {
+        attach: attachMock,
+        sendCommand: sendCommandMock,
+        detach: detachMock,
+      },
+      tabs: {
+        query: vi
+          .fn()
+          .mockResolvedValue([{ id: 10, url: 'https://example.com/test' }]),
+        sendMessage: tabsSendMessageMock,
+      },
+    };
+
+    // 1. SET_DEVICE_EMULATION
+    const setResponse = vi.fn();
+    const handledSet = handleRuntimeMessage(
+      {
+        type: 'SET_DEVICE_EMULATION',
+        tabId: 10,
+        config: { presetId: 'iphone-se' },
+      },
+      {} as chrome.runtime.MessageSender,
+      setResponse
+    );
+    expect(handledSet).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(attachMock).toHaveBeenCalledWith({ tabId: 10 }, '1.3');
+    expect(sendCommandMock).toHaveBeenCalledWith(
+      { tabId: 10 },
+      'Emulation.setDeviceMetricsOverride',
+      expect.objectContaining({ width: 375, height: 667 })
+    );
+    expect(setResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        config: expect.objectContaining({ presetId: 'iphone-se', enabled: true }),
+      })
+    );
+
+    // 2. GET_DEVICE_EMULATION
+    const getResponse = vi.fn();
+    const handledGet = handleRuntimeMessage(
+      { type: 'GET_DEVICE_EMULATION', tabId: 10 },
+      {} as chrome.runtime.MessageSender,
+      getResponse
+    );
+    expect(handledGet).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        config: expect.objectContaining({ presetId: 'iphone-se', enabled: true }),
+      })
+    );
+
+    // 3. CLEAR_DEVICE_EMULATION
+    const clearResponse = vi.fn();
+    const handledClear = handleRuntimeMessage(
+      { type: 'CLEAR_DEVICE_EMULATION', tabId: 10 },
+      {} as chrome.runtime.MessageSender,
+      clearResponse
+    );
+    expect(handledClear).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(detachMock).toHaveBeenCalledWith({ tabId: 10 });
+    expect(clearResponse).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('registers debugger onDetach listener on background listener initialization', () => {
+    const addListenerMock = vi.fn();
+    (globalThis as Record<string, unknown>).chrome = {
+      debugger: {
+        onDetach: {
+          addListener: addListenerMock,
+        },
+      },
+      runtime: {
+        onInstalled: { addListener: vi.fn() },
+        onMessage: { addListener: vi.fn() },
+      },
+      action: {
+        onClicked: { addListener: vi.fn() },
+      },
+    };
+
+    registerBackgroundListeners();
+    expect(addListenerMock).toHaveBeenCalledTimes(1);
   });
 });

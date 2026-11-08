@@ -1,5 +1,11 @@
 import { ExtensionMessage } from '../types/annotation';
 import { getPageState, savePageState } from '../utils/storage';
+import {
+  attachAndEmulateDevice,
+  clearDeviceEmulation,
+  getDeviceEmulationState,
+  handleDebuggerDetach,
+} from './debuggerManager';
 
 const RESTRICTED_URL_PREFIXES = [
   'chrome://',
@@ -105,6 +111,27 @@ export interface ForwardToActiveTabMessage {
   payload: ExtensionMessage;
 }
 
+export async function resolveTargetTabId(
+  explicitTabId?: number,
+  sender?: chrome.runtime.MessageSender
+): Promise<number | undefined> {
+  if (typeof explicitTabId === 'number') {
+    return explicitTabId;
+  }
+  if (typeof sender?.tab?.id === 'number') {
+    return sender.tab.id;
+  }
+  if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      return tabs?.[0]?.id;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export function handleRuntimeMessage(
   message: ExtensionMessage | ForwardToActiveTabMessage,
   sender: chrome.runtime.MessageSender,
@@ -117,6 +144,56 @@ export function handleRuntimeMessage(
   if (message.type === 'GET_PAGE_STATE') {
     const targetUrl = message.url || sender?.tab?.url || '';
     void getPageState(targetUrl).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'SET_DEVICE_EMULATION') {
+    void resolveTargetTabId(message.tabId, sender).then(async (targetTabId) => {
+      if (typeof targetTabId !== 'number') {
+        sendResponse({ ok: false, error: 'No target tab found' });
+        return;
+      }
+      try {
+        const config = await attachAndEmulateDevice(targetTabId, message.config);
+        sendResponse({ ok: true, config });
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    return true;
+  }
+
+  if (message.type === 'CLEAR_DEVICE_EMULATION') {
+    void resolveTargetTabId(message.tabId, sender).then(async (targetTabId) => {
+      if (typeof targetTabId !== 'number') {
+        sendResponse({ ok: false, error: 'No target tab found' });
+        return;
+      }
+      try {
+        await clearDeviceEmulation(targetTabId);
+        sendResponse({ ok: true });
+      } catch (err: unknown) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_DEVICE_EMULATION') {
+    void resolveTargetTabId(message.tabId, sender).then((targetTabId) => {
+      if (typeof targetTabId !== 'number') {
+        sendResponse({ ok: false, error: 'No target tab found' });
+        return;
+      }
+      const config = getDeviceEmulationState(targetTabId);
+      sendResponse({ ok: true, config });
+    });
     return true;
   }
 
@@ -147,7 +224,14 @@ export function handleRuntimeMessage(
 
   // If the Side Panel sends a tab-targeted message via runtime.sendMessage (where sender.tab is undefined),
   // forward it to the active tab automatically.
-  if (!sender?.tab && message.type !== 'PAGE_STATE_UPDATED') {
+  const nonForwardedTypes = [
+    'PAGE_STATE_UPDATED',
+    'DEVICE_EMULATION_UPDATED',
+    'SET_DEVICE_EMULATION',
+    'CLEAR_DEVICE_EMULATION',
+    'GET_DEVICE_EMULATION',
+  ];
+  if (!sender?.tab && !nonForwardedTypes.includes(message.type)) {
     if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
       void chrome.tabs
         .query({ active: true, currentWindow: true })
@@ -174,8 +258,21 @@ export function handleRuntimeMessage(
   return false;
 }
 
+export function registerDebuggerListeners(): void {
+  if (
+    typeof chrome !== 'undefined' &&
+    chrome.debugger &&
+    chrome.debugger.onDetach?.addListener
+  ) {
+    chrome.debugger.onDetach.addListener((source, reason) => {
+      void handleDebuggerDetach(source, reason);
+    });
+  }
+}
+
 export function registerBackgroundListeners(): void {
   void configureSidePanelBehavior();
+  registerDebuggerListeners();
 
   if (typeof chrome === 'undefined') {
     return;
