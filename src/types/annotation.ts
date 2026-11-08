@@ -63,6 +63,8 @@ export interface UserActionLogEntry {
   targetSelector: string;
   targetLabel?: string;
   summary: string;
+  inputValue?: string;
+  scrollPosition?: { x: number; y: number };
   elementSnapshot?: {
     tagName: string;
     id?: string;

@@ -13,6 +13,7 @@ import {
   formatTimestampOffset,
 } from '../utils/promptFormatter';
 import { TimelineBar } from './TimelineBar';
+import { ReplayViewer, SelectedElementData } from './ReplayViewer';
 import {
   Lock,
   Unlock,
@@ -299,90 +300,24 @@ export const StudioApp: React.FC = () => {
   const [popoverInstruction, setPopoverInstruction] = useState('');
   const [popoverPos, setPopoverPos] = useState({ top: 260, left: 40 });
 
-  // Iframe ref & processed snapshot for DOM replay
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  const processedSnapshot = useMemo(() => {
-    return processDomSnapshot(session.initialDomSnapshot || '', maskAllText);
-  }, [session.initialDomSnapshot, maskAllText]);
-
-  // Synchronize iframe document and attach click inspection listener
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !session.initialDomSnapshot) return;
-
-    try {
-      const doc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (!doc) return;
-
-      // Populate document reliably in both browsers and jsdom
-      doc.documentElement.innerHTML = processedSnapshot;
-
-      let lastHovered: HTMLElement | null = null;
-      const handleMouseOver = (ev: MouseEvent) => {
-        const target = ev.target as HTMLElement;
-        if (!target || target === doc.body || target === doc.documentElement) return;
-        if (lastHovered && lastHovered !== target) {
-          lastHovered.classList.remove('dpa-hover-target');
-        }
-        target.classList.add('dpa-hover-target');
-        lastHovered = target;
-      };
-
-      const handleMouseOut = (ev: MouseEvent) => {
-        const target = ev.target as HTMLElement;
-        target?.classList?.remove('dpa-hover-target');
-      };
-
-      const handleClick = (ev: MouseEvent) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const target = ev.target as HTMLElement;
-        if (!target || target === doc.body || target === doc.documentElement) return;
-
-        const rect = target.getBoundingClientRect();
-        const selector = target.id
-          ? `#${target.id}`
-          : target.className && typeof target.className === 'string'
-          ? `${target.tagName.toLowerCase()}.${target.className.trim().split(/\s+/).join('.')}`
-          : target.tagName.toLowerCase();
-
-        const compName = target.getAttribute('data-component') || undefined;
-
-        setPopoverTarget({
-          selector,
-          tagName: target.tagName.toLowerCase(),
-          textContent: target.textContent?.trim().slice(0, 100) || '',
-          componentName: compName,
-          computedStyles: {
-            color: window.getComputedStyle ? window.getComputedStyle(target).color : '',
-            backgroundColor: window.getComputedStyle ? window.getComputedStyle(target).backgroundColor : '',
-          },
-        });
-        setPopoverInstruction(
-          compName === 'HeroPricingCard'
-            ? 'CTAボタンをグラデーションに変更し、ホバー演出を追加'
-            : ''
-        );
-        setPopoverPos({
-          top: Math.max(20, Math.min(rect.bottom + 10, artboardHeight - 200)),
-          left: Math.max(20, Math.min(rect.left, 200)),
-        });
-      };
-
-      doc.addEventListener('mouseover', handleMouseOver);
-      doc.addEventListener('mouseout', handleMouseOut);
-      doc.addEventListener('click', handleClick);
-
-      return () => {
-        doc.removeEventListener('mouseover', handleMouseOver);
-        doc.removeEventListener('mouseout', handleMouseOut);
-        doc.removeEventListener('click', handleClick);
-      };
-    } catch {
-      // Ignore cross-origin error if any
-    }
-  }, [processedSnapshot, session.initialDomSnapshot, artboardHeight]);
+  const handleElementSelect = (data: SelectedElementData) => {
+    setPopoverTarget({
+      selector: data.selector,
+      tagName: data.tagName,
+      textContent: data.textContent,
+      componentName: data.componentName,
+      computedStyles: data.computedStyles,
+    });
+    setPopoverInstruction(
+      data.componentName === 'HeroPricingCard'
+        ? 'CTAボタンをグラデーションに変更し、ホバー演出を追加'
+        : ''
+    );
+    setPopoverPos({
+      top: Math.max(20, Math.min(data.rect.bottom + 10, artboardHeight - 200)),
+      left: Math.max(20, Math.min(data.rect.left, 200)),
+    });
+  };
 
   // Toast / feedback alert
   const [toastAlert, setToastAlert] = useState<string | null>(null);
@@ -399,6 +334,7 @@ export const StudioApp: React.FC = () => {
           (response: { ok?: boolean; session?: RecordingSession }) => {
             if (response?.ok && response.session) {
               setSession(response.session);
+              setCurrentTimeMs(0);
               setMaskAllText(Boolean(response.session.maskingConfig?.maskAllText));
               if (response.session.viewport) {
                 const vp = response.session.viewport;
@@ -619,9 +555,6 @@ export const StudioApp: React.FC = () => {
   const selectedAnnotation = useMemo(() => {
     return session.annotations.find((a) => a.id === selectedAnnotationId) || null;
   }, [session.annotations, selectedAnnotationId]);
-
-  // Dynamic toast is visible between 3.0s (3000ms) and 6.0s (6000ms) in replayed DOM
-  const isToastVisible = currentTimeMs >= 3000 && currentTimeMs <= 6000;
 
   // Masked text resolver helper
   const displaySampleText = (text: string) => {
@@ -968,37 +901,16 @@ export const StudioApp: React.FC = () => {
                 </div>
               )}
 
-              {/* REPLAYED WEB APP CONTENT */}
-              {session.initialDomSnapshot ? (
-                <div
-                  className="flex-1 bg-white overflow-hidden relative"
-                  data-testid="studio-replayed-iframe-wrap"
-                >
-                  <iframe
-                    ref={iframeRef}
-                    title="Recorded DOM Snapshot Screen"
-                    className="w-full h-full border-none block bg-white"
-                    srcDoc={processedSnapshot}
-                    sandbox="allow-same-origin allow-scripts"
-                    data-testid="studio-replayed-iframe"
-                  />
-                </div>
-              ) : (
-                <div
-                  className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#18181b] text-zinc-400 h-full select-none"
-                  data-testid="studio-empty-snapshot"
-                >
-                  <div className="w-12 h-12 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center mb-3 text-zinc-300">
-                    <Code2 className="w-6 h-6" />
-                  </div>
-                  <div className="text-sm font-semibold text-zinc-200 mb-1">
-                    スナップショットが記録されていません
-                  </div>
-                  <div className="text-xs text-zinc-500 max-w-xs">
-                    録画セッションにDOMスナップショットが含まれていないか、空です。
-                  </div>
-                </div>
-              )}
+              {/* REPLAYED WEB APP CONTENT (rrweb Replayer or fallback) */}
+              <ReplayViewer
+                events={session.rrwebEvents}
+                initialDomSnapshot={session.initialDomSnapshot}
+                maskAllText={maskAllText}
+                currentTimeMs={currentTimeMs}
+                isPlaying={isPlaying}
+                artboardHeight={artboardHeight}
+                onSelectElement={handleElementSelect}
+              />
             </div>
 
             {/* IN-CANVAS FIGMA POPOVER (Inspect Card anchored to target) */}
