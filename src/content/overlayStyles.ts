@@ -22,6 +22,101 @@ export const OVERLAY_CSS = `
     overflow: visible;
   }
 
+  /* ========================================================================= */
+  /* IN-PAGE DEVICE PREVIEW (fixed overlay; never moves page layout)          */
+  /* ========================================================================= */
+  .dpa-device-preview-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483640;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 30px;
+    background: rgba(0, 0, 0, 0.72);
+    pointer-events: auto;
+    overflow: hidden;
+  }
+
+  .dpa-device-preview-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    margin-bottom: 0;
+    padding: 2px 4px 2px 10px;
+    border-radius: 8px;
+    background: rgba(44, 44, 44, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #e5e5e5;
+    font-size: 12px;
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+
+  .dpa-device-preview-label-name {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .dpa-device-preview-label-dim {
+    color: #9ca3af;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: nowrap;
+  }
+
+  .dpa-device-preview-close {
+    appearance: none;
+    border: none;
+    border-radius: 6px;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    color: #e5e5e5;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .dpa-device-preview-close:hover {
+    background: rgba(239, 68, 68, 0.3);
+    color: #ffffff;
+  }
+
+  .dpa-device-preview-frame {
+    position: relative;
+    flex-shrink: 0;
+    background: #ffffff;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px -8px rgba(0, 0, 0, 0.75);
+    pointer-events: auto;
+  }
+
+  .dpa-device-preview-iframe {
+    display: block;
+    border: 0;
+    background: #ffffff;
+  }
+
+  .dpa-device-preview-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    text-align: center;
+    background: rgba(20, 20, 20, 0.88);
+    color: #fca5a5;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
   /* Utility icons and flex helpers */
   .dpa-icon-xs {
     width: 14px;
@@ -191,7 +286,10 @@ export const OVERLAY_CSS = `
   .dpa-btn-device {
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.08);
-    max-width: 200px;
+    width: 176px;
+    max-width: 176px;
+    min-width: 176px;
+    justify-content: flex-start;
   }
 
   .dpa-btn-device--active {
@@ -206,6 +304,9 @@ export const OVERLAY_CSS = `
     white-space: nowrap;
     font-size: 11px;
     font-weight: 500;
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
   }
 
   .dpa-device-badge {
@@ -235,6 +336,11 @@ export const OVERLAY_CSS = `
     justify-content: center;
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .dpa-btn-rotate--idle {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .dpa-device-menu {
@@ -316,39 +422,7 @@ export const OVERLAY_CSS = `
     color: #cbd5e1;
   }
 
-  /* 3. REC Button */
-  .dpa-btn-rec {
-    background: rgba(244, 63, 94, 0.12);
-    border-color: rgba(244, 63, 94, 0.25);
-    color: #fb7185;
-  }
-
-  .dpa-btn-rec:hover {
-    background: rgba(244, 63, 94, 0.2);
-    border-color: rgba(244, 63, 94, 0.4);
-    color: #f43f5e;
-  }
-
-  .dpa-btn-rec--recording {
-    background: rgba(244, 63, 94, 0.25);
-    border-color: #f43f5e;
-    color: #ffffff;
-    font-family: monospace;
-    font-weight: 600;
-  }
-
-  .dpa-rec-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #f43f5e;
-  }
-
-  .dpa-rec-dot--active {
-    background: #ff1a40;
-  }
-
-  /* 4. Annotations Drawer Button */
+  /* 3. Annotations Drawer Button */
   .dpa-btn-drawer--has-items {
     background: rgba(13, 153, 255, 0.12);
     border-color: rgba(13, 153, 255, 0.25);
@@ -452,7 +526,9 @@ export const OVERLAY_CSS = `
       font-size: 11.5px;
     }
     .dpa-btn-device {
+      width: 140px;
       max-width: 140px;
+      min-width: 140px;
     }
     .dpa-divider {
       margin: 0 1px;
@@ -470,7 +546,9 @@ export const OVERLAY_CSS = `
       font-size: 11px;
     }
     .dpa-btn-device {
+      width: 110px;
       max-width: 110px;
+      min-width: 110px;
     }
     .dpa-btn-rotate {
       width: 24px;
@@ -500,7 +578,9 @@ export const OVERLAY_CSS = `
       font-size: 10px;
     }
     .dpa-btn-device {
+      width: 80px;
       max-width: 80px;
+      min-width: 80px;
     }
     .dpa-btn-minimize,
     .dpa-btn-close {

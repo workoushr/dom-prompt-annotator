@@ -127,8 +127,8 @@ describe('storage utility', () => {
     });
   });
 
-  describe('chrome.storage.local mode', () => {
-    it('reads, writes, and removes using chrome.storage.local when available', async () => {
+  describe('chrome.storage.session mode', () => {
+    it('reads, writes, and removes using chrome.storage.session when available', async () => {
       const backingObject: Record<string, unknown> = {};
       const getMock = vi.fn(async (key: string) => ({
         [key]: backingObject[key],
@@ -139,13 +139,17 @@ describe('storage utility', () => {
       const removeMock = vi.fn(async (key: string) => {
         delete backingObject[key];
       });
+      const localGetMock = vi.fn();
 
       vi.stubGlobal('chrome', {
         storage: {
-          local: {
+          session: {
             get: getMock,
             set: setMock,
             remove: removeMock,
+          },
+          local: {
+            get: localGetMock,
           },
         },
       });
@@ -158,18 +162,89 @@ describe('storage utility', () => {
       expect(getMock).toHaveBeenCalledWith(expectedStorageKey);
 
       await savePageState(url, {
-        globalInstruction: 'Stored in chrome.storage.local',
+        globalInstruction: 'Stored in chrome.storage.session',
       });
       expect(setMock).toHaveBeenCalledTimes(1);
 
       const loaded = await getPageState(url);
-      expect(loaded.globalInstruction).toBe('Stored in chrome.storage.local');
+      expect(loaded.globalInstruction).toBe('Stored in chrome.storage.session');
 
       await clearPageState(url);
       expect(removeMock).toHaveBeenCalledWith(expectedStorageKey);
 
       const afterClear = await getPageState(url);
       expect(afterClear.globalInstruction).toBe('');
+
+      // Page state must never touch the on-disk local area.
+      expect(localGetMock).not.toHaveBeenCalled();
+    });
+
+    it('retries once after requesting access when session storage is denied', async () => {
+      const backingObject: Record<string, unknown> = {};
+      const storageKey = `${STORAGE_KEY_PREFIX}https://retry.example.com/page`;
+      backingObject[storageKey] = { globalInstruction: 'Granted on retry' };
+
+      const getMock = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Access denied'))
+        .mockResolvedValueOnce({ [storageKey]: backingObject[storageKey] });
+      const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
+
+      vi.stubGlobal('chrome', {
+        storage: {
+          session: {
+            get: getMock,
+            set: vi.fn(),
+            remove: vi.fn(),
+          },
+        },
+        runtime: {
+          sendMessage: sendMessageMock,
+        },
+      });
+
+      const state = await getPageState('https://retry.example.com/page?tab=1');
+
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock).toHaveBeenCalledWith({
+        type: 'ENSURE_STATE_ACCESS',
+      });
+      expect(getMock).toHaveBeenCalledTimes(2);
+      expect(state.globalInstruction).toBe('Granted on retry');
+    });
+
+    it('falls back to memory and never throws when session storage stays unavailable', async () => {
+      const getMock = vi.fn().mockRejectedValue(new Error('Access denied'));
+      const setMock = vi.fn().mockRejectedValue(new Error('Access denied'));
+      const removeMock = vi.fn().mockRejectedValue(new Error('Access denied'));
+
+      vi.stubGlobal('chrome', {
+        storage: {
+          session: {
+            get: getMock,
+            set: setMock,
+            remove: removeMock,
+          },
+        },
+        runtime: {
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      const url = 'https://fallback.example.com/page';
+
+      await expect(
+        savePageState(url, { globalInstruction: 'Memory only' })
+      ).resolves.toMatchObject({ globalInstruction: 'Memory only' });
+
+      await expect(getPageState(url)).resolves.toMatchObject({
+        globalInstruction: 'Memory only',
+      });
+
+      await expect(clearPageState(url)).resolves.toBeUndefined();
+      await expect(getPageState(url)).resolves.toMatchObject({
+        globalInstruction: '',
+      });
     });
   });
 });

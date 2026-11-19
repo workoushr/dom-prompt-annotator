@@ -3,7 +3,7 @@ import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OverlayApp } from '../content/OverlayApp';
 import { SidePanelApp } from '../sidepanel/SidePanelApp';
-import { resetMemoryStoreForTests, savePageState } from '../utils/storage';
+import { getPageState, resetMemoryStoreForTests, savePageState } from '../utils/storage';
 import { SHADOW_HOST_ID } from '../utils/masker';
 import { ExportPayload, ExtensionMessage } from '../types/annotation';
 
@@ -488,6 +488,9 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     await flushAsync();
 
     // Click "クリップボードにコピー" in Markdown mode
+    const annotationsBeforeCopy = (
+      await getPageState(window.location.href)
+    ).annotations;
     const copyBtn = sidePanelMount.querySelector(
       '[data-testid="copy-export-btn"]'
     ) as HTMLButtonElement;
@@ -528,6 +531,29 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(markdownExport).toContain('[MASKED_PHONE]');
     expect(markdownExport).toContain('[MASKED_TOKEN]');
     expect(markdownExport).toContain('[MASKED]');
+
+    // Copy now clears markings; verify that ephemeral behavior, then restore
+    // the annotations to inspect the JSON payload shape.
+    expect(overlayMount.querySelector('[data-testid="dpa-badge-1"]')).toBeNull();
+    expect(
+      (await getPageState(window.location.href)).annotations
+    ).toHaveLength(0);
+
+    const restored = await savePageState(window.location.href, {
+      annotations: annotationsBeforeCopy,
+    });
+    await act(async () => {
+      for (const listener of Array.from(messageListeners)) {
+        listener(
+          { type: 'PAGE_STATE_UPDATED', state: restored },
+          {} as chrome.runtime.MessageSender,
+          () => {}
+        );
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushAsync();
 
     // Now switch to pure JSON mode and copy again
     const jsonFormatBtn = sidePanelMount.querySelector(

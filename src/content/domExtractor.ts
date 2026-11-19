@@ -256,7 +256,7 @@ export function generateXPath(el: Element): string {
   const segments: string[] = [];
   let current: Element | null = el;
 
-  while (current && current.nodeType === Node.ELEMENT_NODE) {
+  while (current && current.nodeType === 1) {
     const tag = current.tagName.toLowerCase();
     const parent: Element | null = current.parentElement;
 
@@ -283,18 +283,21 @@ export function generateXPath(el: Element): string {
 }
 
 /**
- * Finds an HTMLElement by first trying `root.querySelector(selector)`,
+ * Finds an `Element` (HTML or SVG) by first trying `root.querySelector(selector)`,
  * then falling back to `root.evaluate(xpath, ...)`.
+ *
+ * Avoids `instanceof HTMLElement` so elements from same-origin iframe documents
+ * (device preview) resolve correctly across realms.
  */
 export function findElementBySelectorOrXPath(
   selector: string,
   xpath?: string,
   root: Document = document
-): HTMLElement | null {
+): Element | null {
   if (selector && selector.trim()) {
     try {
       const found = root.querySelector(selector.trim());
-      if (found instanceof HTMLElement) {
+      if (found) {
         return found;
       }
     } catch {
@@ -308,12 +311,12 @@ export function findElementBySelectorOrXPath(
         xpath.trim(),
         root,
         null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        9 /* XPathResult.FIRST_ORDERED_NODE_TYPE */,
         null
       );
       const node = xPathResult.singleNodeValue;
-      if (node instanceof HTMLElement) {
-        return node;
+      if (node && node.nodeType === 1) {
+        return node as Element;
       }
     } catch {
       // Ignore invalid XPath
@@ -327,11 +330,12 @@ export function findElementBySelectorOrXPath(
  * Extracts key layout and visual computed styles from `el`, omitting empty or meaningless defaults.
  */
 export function extractComputedStyles(el: Element): Record<string, string> {
-  if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+  const view = el.ownerDocument?.defaultView;
+  if (!view || typeof view.getComputedStyle !== 'function') {
     return {};
   }
 
-  const styles = window.getComputedStyle(el);
+  const styles = view.getComputedStyle(el);
   const result: Record<string, string> = {};
 
   for (const prop of KEY_COMPUTED_STYLE_PROPERTIES) {
@@ -426,7 +430,8 @@ export function requestFrameworkMetadata(el: Element): FrameworkMetadata {
     return direct;
   }
 
-  if (typeof window === 'undefined') {
+  const view = el.ownerDocument?.defaultView;
+  if (!view) {
     return createEmptyFrameworkMetadata();
   }
 
@@ -445,9 +450,9 @@ export function requestFrameworkMetadata(el: Element): FrameworkMetadata {
 
   try {
     el.setAttribute(INSPECT_TARGET_ATTR, requestId);
-    window.addEventListener(INSPECT_RESPONSE_EVENT, onResponse);
-    window.dispatchEvent(
-      new CustomEvent(INSPECT_REQUEST_EVENT, {
+    view.addEventListener(INSPECT_RESPONSE_EVENT, onResponse);
+    view.dispatchEvent(
+      new view.CustomEvent(INSPECT_REQUEST_EVENT, {
         detail: { requestId },
       })
     );
@@ -462,7 +467,7 @@ export function requestFrameworkMetadata(el: Element): FrameworkMetadata {
       }
     }
   } finally {
-    window.removeEventListener(INSPECT_RESPONSE_EVENT, onResponse);
+    view.removeEventListener(INSPECT_RESPONSE_EVENT, onResponse);
     el.removeAttribute(INSPECT_TARGET_ATTR);
     el.removeAttribute(INSPECT_RESULT_ATTR);
   }
@@ -482,12 +487,15 @@ function extractElementAttributes(el: Element): Record<string, string> {
     }
   }
 
+  const tag = el.tagName.toLowerCase();
   if (
-    (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
-    el.value &&
+    (tag === 'input' || tag === 'textarea') &&
     attrs.value === undefined
   ) {
-    attrs.value = el.value;
+    const value = (el as HTMLInputElement | HTMLTextAreaElement).value;
+    if (value) {
+      attrs.value = value;
+    }
   }
 
   return attrs;
@@ -495,11 +503,12 @@ function extractElementAttributes(el: Element): Record<string, string> {
 
 function extractCleanTextContent(el: Element, maxLength = 300): string {
   let raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
-  if (
-    !raw &&
-    (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
-  ) {
-    raw = (el.value || el.placeholder || '').trim();
+  if (!raw) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      const field = el as HTMLInputElement | HTMLTextAreaElement;
+      raw = (field.value || field.placeholder || '').trim();
+    }
   }
   if (raw.length > maxLength) {
     return `${raw.slice(0, maxLength)}...`;
@@ -554,10 +563,10 @@ export function extractElementMetadata(
 }
 
 /**
- * Returns the parent `HTMLElement` candidate for DOM hierarchy traversal,
+ * Returns the parent `Element` candidate for DOM hierarchy traversal,
  * stopping at `document.body` (never returning `document.body` or `document.documentElement`).
  */
-export function getParentCandidate(el: Element | null): HTMLElement | null {
+export function getParentCandidate(el: Element | null): Element | null {
   if (!el) {
     return null;
   }
@@ -581,17 +590,17 @@ export function getParentCandidate(el: Element | null): HTMLElement | null {
 }
 
 /**
- * Returns the first valid child `HTMLElement` candidate for DOM hierarchy traversal,
- * skipping `#dpa-root-host`, `script`, `style`, and non-HTML elements.
+ * Returns the first valid child `Element` candidate for DOM hierarchy traversal,
+ * skipping `#dpa-root-host`, `script`, `style`, and non-element nodes.
  */
-export function getFirstChildCandidate(el: Element | null): HTMLElement | null {
+export function getFirstChildCandidate(el: Element | null): Element | null {
   if (!el || !el.children) {
     return null;
   }
 
   for (let i = 0; i < el.children.length; i++) {
     const child = el.children[i];
-    if (!(child instanceof HTMLElement)) {
+    if (!child || child.nodeType !== 1) {
       continue;
     }
     if (child.id === SHADOW_HOST_ID) {

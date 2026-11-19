@@ -1,10 +1,16 @@
 import {
   DEFAULT_MASKING_CONFIG,
+  ExtensionMessage,
   MaskingConfig,
   PageAnnotationState,
 } from '../types/annotation';
 
 export const STORAGE_KEY_PREFIX = 'dpa_page_state:';
+export const PAGE_STATE_STORAGE_AREA = 'session';
+
+const ENSURE_STATE_ACCESS_MESSAGE: ExtensionMessage = {
+  type: 'ENSURE_STATE_ACCESS',
+};
 
 const memoryStore = new Map<string, PageAnnotationState>();
 
@@ -62,14 +68,79 @@ export function createDefaultPageState(url: string): PageAnnotationState {
   };
 }
 
-function hasChromeStorage(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    Boolean(chrome?.storage?.local) &&
-    typeof chrome.storage.local.get === 'function' &&
-    typeof chrome.storage.local.set === 'function' &&
-    typeof chrome.storage.local.remove === 'function'
-  );
+function getSessionStorage(): chrome.storage.StorageArea | null {
+  try {
+    if (typeof chrome === 'undefined') {
+      return null;
+    }
+    const session = chrome.storage?.session;
+    if (
+      !session ||
+      typeof session.get !== 'function' ||
+      typeof session.set !== 'function' ||
+      typeof session.remove !== 'function'
+    ) {
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Content scripts run in an untrusted context and may be denied access to
+ * `chrome.storage.session`. Ask the background service worker to grant access.
+ */
+async function requestStateAccess(): Promise<boolean> {
+  try {
+    if (
+      typeof chrome === 'undefined' ||
+      !chrome.runtime ||
+      typeof chrome.runtime.sendMessage !== 'function'
+    ) {
+      return false;
+    }
+    const response = (await chrome.runtime.sendMessage(
+      ENSURE_STATE_ACCESS_MESSAGE
+    )) as { ok?: boolean } | undefined;
+    return Boolean(response && response.ok);
+  } catch {
+    return false;
+  }
+}
+
+type SessionOperation<T> =
+  | { ok: true; value: T }
+  | { ok: false; value?: undefined };
+
+/**
+ * Runs a session-storage operation, retrying exactly once after asking the
+ * background to grant the current context access. Never throws.
+ */
+async function withSessionStorage<T>(
+  operation: (area: chrome.storage.StorageArea) => Promise<T>
+): Promise<SessionOperation<T>> {
+  const area = getSessionStorage();
+  if (!area) {
+    return { ok: false };
+  }
+
+  try {
+    return { ok: true, value: await operation(area) };
+  } catch {
+    // Fall through to the single access-request retry.
+  }
+
+  if (!(await requestStateAccess())) {
+    return { ok: false };
+  }
+
+  try {
+    return { ok: true, value: await operation(area) };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function cloneMaskingConfig(
@@ -151,16 +222,15 @@ function sanitizePageState(
 export async function getPageState(url: string): Promise<PageAnnotationState> {
   const storageKey = getStorageKey(url);
 
-  if (hasChromeStorage()) {
-    const result = await chrome.storage.local.get(storageKey);
-    const stored = result?.[storageKey] as
-      | PageAnnotationStatePatch
-      | undefined;
+  const result = await withSessionStorage((area) => area.get(storageKey));
+  if (result.ok) {
+    const stored = (result.value as Record<string, unknown> | null)?.[
+      storageKey
+    ] as PageAnnotationStatePatch | undefined;
     return sanitizePageState(url, stored);
   }
 
-  const stored = memoryStore.get(storageKey);
-  return sanitizePageState(url, stored);
+  return sanitizePageState(url, memoryStore.get(storageKey));
 }
 
 export async function savePageState(
@@ -180,9 +250,10 @@ export async function savePageState(
     ),
   });
 
-  if (hasChromeStorage()) {
-    await chrome.storage.local.set({ [storageKey]: nextState });
-  } else {
+  const result = await withSessionStorage((area) =>
+    area.set({ [storageKey]: nextState })
+  );
+  if (!result.ok) {
     memoryStore.set(storageKey, nextState);
   }
 
@@ -192,9 +263,8 @@ export async function savePageState(
 export async function clearPageState(url: string): Promise<void> {
   const storageKey = getStorageKey(url);
 
-  if (hasChromeStorage()) {
-    await chrome.storage.local.remove(storageKey);
-  } else {
+  const result = await withSessionStorage((area) => area.remove(storageKey));
+  if (!result.ok) {
     memoryStore.delete(storageKey);
   }
 }

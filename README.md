@@ -12,15 +12,17 @@
 - **ブラウザ上のDOMとソースコード上のコンポーネント（React / Vue）の対応付けが手間**
 - **本番・ステージング環境や社内管理画面のテキストに個人情報（PII）や社外秘データが含まれており、そのままLLMのプロンプトに含められない**
 
-**DOM Prompt Annotator** は、Chrome デベロッパーツールのような要素インスペクタと、画面を邪魔しない **Chrome Side Panel UI**、そして **Playwright `page.screenshot({ mask: [...] })` に着想を得たマスキングエンジン** を統合することで、安全かつ正確にAIへフロントエンド修正指示を伝達します。
+**DOM Prompt Annotator** は、Chrome デベロッパーツールのような要素インスペクタ、**Chrome サイドパネル**、ページ上に常駐する **Figma UI3 風のフローティングボトムバー**、そして **Playwright `page.screenshot({ mask: [...] })` に着想を得たマスキングエンジン** を統合することで、安全かつ正確にAIへフロントエンド修正指示を伝達します。
 
 ---
 
 ## 主な機能 (Key Features)
 
-### 1. Chrome Side Panel API 連携 & ページ内ポップオーバー入力
-- 拡張機能アイコンをクリックすると **Chrome サイドパネル** が開き、対象ページのレイアウトやビューポートを崩さずに指示リストを管理できます。
+### 1. サイドパネル & ページ内ポップオーバー
+- ツールバーの拡張機能アイコンをクリックすると **Chrome サイドパネル** が開き、同時にページ側の **選択モード (Inspect ON)** が有効になります。
+- サイドパネルでは指示一覧の確認・削除、共通前提の編集、マスキング設定、出力フォーマットの選択とコピーを行えます。
 - ページ上の要素をクリックすると、Shadow DOM でスタイル隔離された **インページ・ポップオーバー** が開き、その場で素早く修正指示を入力（`Ctrl/Cmd + Enter` で即保存）できます。
+- ページ下部のフローティングボトムバーからも、選択モード切替・デバイスプレビュー・指示一覧・コピーを操作できます。
 
 ### 2. 親子DOM階層のワンクリック微調整 (`↑ 親要素` / `↓ 子要素`)
 - クリックした箇所が `<span>` や `<svg>` などの内側要素だった場合でも、ポップオーバー内の **`↑ 親要素 (Parent)`** / **`↓ 子要素 (Child)`** ボタン（または `Alt + ↑` / `Alt + ↓` ショートカット）で、親の `<button>` やカード全体の `<section>` へ即座にターゲットを切り替えられます。
@@ -32,7 +34,7 @@
 ### 4. Playwright風 文章・要素マスキング機能 🛡️
 Playwright のビジュアルマスク機能に着想を得た、多層的なプライバシー＆機密保護機能を備えています。
 - **Playwright Mask Selectors (`maskSelectors`)**:
-  - デフォルトで `input[type="password"]` と `[data-mask="true"]` が登録されており、サイドパネルから `.customer-name` や `.secret-card` など任意のCSSセレクタを自由に追加・削除できます。
+  - デフォルトで `input[type="password"]` と `[data-mask="true"]` が登録されており、サイドパネルまたはページ内ドロワーから `.customer-name` や `.secret-card` など任意のCSSセレクタを自由に追加・削除できます。
   - マッチした要素（および子孫要素）は、HTML構造・タグ・CSSクラスを維持したまま、テキストと機密属性（`value`, `placeholder`, `title`, `alt`, `aria-label`）が自動的に `[MASKED]` に置換されます。
 - **画面上のビジュアルマスク表示 (`#FF00FF` ストライプオーバーレイ)**:
   - マスク対象の要素が画面上で一目で分かるよう、Playwright 風のマゼンタ色（`#FF00FF`、カラーピッカーで変更可能）のストライプ枠＋`MASKED` バッジをリアルタイム描画します。
@@ -42,15 +44,41 @@ Playwright のビジュアルマスク機能に着想を得た、多層的なプ
   - クレジットカード番号（13〜19桁） ➔ `[MASKED_CARD]`
   - JWT / Bearerトークン / OpenAI (`sk-...`) / GitHub (`ghp_...`) / AWS (`AKIA...`) 等のAPIキー ➔ `[MASKED_TOKEN]`
 - **要素単位のワンクリックマスク (`maskText`) & 全文マスクモード (`maskAllText`)**:
-  - 個別の要素だけテキストを隠したい場合はポップオーバーまたはカードの「マスクON/OFF」で切り替え可能。「全文マスク」をONにすれば、ページ内の全テキストを隠してDOM構造・CSSクラス・座標・スタイルのみを出力できます。
+  - 個別の要素だけテキストを隠したい場合はポップオーバーまたはカードの「マスクON/OFF」で切り替え可能。「全文テキストマスク」をONにすれば、ページ内の全テキストを隠してDOM構造・CSSクラス・座標・スタイルのみを出力できます。
 
-### 5. 選択モード ⇔ 通常操作モード切替 (`Alt + S`) & リロード後の自動復元
-- `Alt + S`（またはサイドパネル/画面右下ピルのボタン）で、要素を選択する **選択モード (Inspect ON)** と、普段通りボタンクリックやモーダル展開ができる **通常操作モード (Normal)** を瞬時に切り替えられます。
-- 付与した指示データと設定は URL 単位（`origin + pathname`）で `chrome.storage.local` に自動保存されるため、Vite HMR やページリロード後も CSS セレクタ / XPath から `#1`, `#2` バッジが自動復元されます。
+### 5. 選択モード ⇔ 通常操作モード切替 (`Alt + S`)
+- `Alt + S`（またはサイドパネル/ボトムバーのボタン）で、要素を選択する **選択モード (Inspect ON)** と、普段通りボタンクリックやモーダル展開ができる **通常操作モード (Normal)** を瞬時に切り替えられます。
+- 選択モード中はホバー枠と要素情報ツールチップを表示し、通常操作モード中はページ本来のインタラクションを妨げません。
 
-### 6. 2種類の出力フォーマット（LLM向けMarkdownプロンプト / 純粋なJSON）
+### 6. セッション限定のページ状態
+- 注釈・設定などのページ状態は **`chrome.storage.session`** にのみ保持し、ディスクへは保存しません。
+- 付与した番号バッジと指示は **ページの更新・再読み込みで消えます**。リロード後に自動復元されることはありません。
+- **プロンプトのコピーに成功すると、そのページのマーキング（番号バッジ・指示）を全消去**します。同じ画面で続けて別の修正指示を作り直す場合は、改めて要素を選択してください。
+
+### 7. ページ内 iframe デバイスプレビュー
+- ボトムバーのデバイスメニューから iPhone SE / iPhone 15 Pro / iPad Mini / Desktop / Desktop HD などのプリセット、縦横回転を選択できます。
+- 選択したサイズの **iframe プレビュー** をページ内に表示します。ボトムバー自体の位置は動かず、プレビューを開閉しても操作バーは同じ場所に固定されます。
+- **同一オリジン**のページのみ、プレビュー内の要素を選択・注釈できます。クロスオリジンのプレビューは表示のみとなります。
+- 対象サイトが `X-Frame-Options` や CSP の `frame-ancestors` で iframe 埋め込みを拒否している場合、プレビューを表示できないことがあります（その場合も通常のページ上での注釈操作は継続できます）。
+
+### 8. 2種類の出力フォーマット（LLM向けMarkdown+JSON / 純粋なJSON）
 - **LLMプロンプト + JSON (Markdown)**: Claude / ChatGPT / Cursor のチャット欄にそのまま貼り付けられる、自然言語の構造化サマリー＋詳細JSONブロックのハイブリッド形式。
 - **純粋なJSON**: 自動化ツールやカスタムスクリプトに連携しやすい整形済み JSON 形式。
+
+---
+
+## 権限 (Permissions)
+
+`public/manifest.json` で要求する権限は以下の通りです。デバッガ関連の権限は使用しません。
+
+| 権限 | 用途 |
+| :--- | :--- |
+| `sidePanel` | ツールバーのアイコンクリックでサイドパネルを開く |
+| `activeTab` | 操作対象のアクティブタブへアクセスする |
+| `storage` | ページ状態を `chrome.storage.session` に保持する |
+| `scripting` | コンテンツスクリプトが未注入のタブへフォールバック注入する |
+| `tabs` | アクティブタブのURL・タイトルを取得して状態を同期する |
+| `host_permissions: <all_urls>` | 任意のページでDOM選択・注釈・マスキングを行う |
 
 ---
 
@@ -68,7 +96,7 @@ cd dom-prompt-annotator
 # 依存パッケージのインストール
 npm install
 
-# 型チェック・テスト・本番ビルド (dist/ ディレクトリに出力されます)
+# 型チェック・単体テスト・本番ビルド (dist/ ディレクトリに出力されます)
 npm run typecheck
 npm test
 npm run build
@@ -80,7 +108,7 @@ npm run build
 2. 画面右上の **「デベロッパー モード (Developer mode)」** トグルを **ON** にします。
 3. 左上の **「パッケージ化されていない拡張機能を読み込む (Load unpacked)」** をクリックします。
 4. 本リポジトリ内のビルド出力フォルダ **`dist/`** を選択して読み込みます。
-5. ツールバーの拡張機能アイコンから **「DOM Prompt Annotator」** をピン留めし、アイコンをクリックすると右側にサイドパネルが開きます。
+5. ツールバーの拡張機能アイコンから **「DOM Prompt Annotator」** をピン留めし、アイコンをクリックすると右側にサイドパネルが開き、ページ側は選択モードになります。
 
 ### 3. 同梱デモページ (`demo.html`) での動作確認
 
@@ -93,18 +121,40 @@ npx vite preview --port 4173
 
 > **Note**: `file://` URL で開いたページに対して拡張機能を動作させる場合は、`chrome://extensions` の「DOM Prompt Annotator」詳細画面で **「ファイルの URL へのアクセスを許可する」** を ON にしてください。
 
+### 4. 実ブラウザ E2E テスト (`npm run test:e2e`)
+
+`npm run test:e2e` は `dist/` をビルドした上で、**アンパック済み拡張機能を実際の Chrome に読み込んで** 以下を検証します。
+
+- ボトムバーと Service Worker の起動
+- 要素選択からポップオーバー保存、番号バッジと指示数の反映
+- プロンプトのコピー（クリップボード内容）と、コピー成功後のマーキング消去
+- ページ再読み込み後にマーキングが復元されないこと
+- iframe デバイスプレビューの表示と、開閉時にボトムバーが移動しないこと
+
+実行には Chrome for Testing（または Playwright の Chromium）が必要です。次のいずれかの方法で解決されます。
+
+```bash
+# 方法 A: Playwright の Chromium を用意する（~/.cache/ms-playwright 配下を自動検出）
+npx playwright install chromium
+
+# 方法 B: Chrome for Testing の実行ファイルを明示する
+CHROME_PATH=/path/to/chrome-for-testing/chrome npm run test:e2e
+```
+
+ヘッドレスモードで実行されるため、GUI のない CI 環境でも動作します。
+
 ---
 
 ## 使い方とショートカットキー一覧 (Usage & Shortcuts)
 
 ### 基本ワークフロー
 
-1. 対象のWebページを開き、拡張機能アイコンをクリックして **サイドパネル** を表示します。
-2. サイドパネル上部の **「選択モード (Inspect ON)」** ボタンをクリックするか、キーボードの **`Alt + S`** を押します。
+1. 対象のWebページを開き、拡張機能アイコンをクリックして **サイドパネル** を表示します（ページ側は選択モードになります）。
+2. 選択モードがOFFの場合は、サイドパネル上部の **「選択モード (Inspect ON)」** ボタン、ボトムバーの「選択」ボタン、または **`Alt + S`** で有効にします。
 3. ページ上の修正したい要素にマウスを合わせると、青色のハイライト枠と `<tag#id.class> [React: ComponentName]` ツールチップが表示されます。
 4. 要素をクリックすると **ポップオーバー** が開きます。必要に応じて **`↑ 親要素`** / **`↓ 子要素`** で対象要素の階層を調整し、修正指示を入力して **「追加 / 保存」**（`Ctrl + Enter` / `Cmd + Enter`）を押します。
 5. モーダルを開いたりアコーディオンを展開したい場合は、一度 **`Alt + S`** で通常操作モードに戻して画面を操作し、再度 **`Alt + S`** で選択モードに切り替えて続きの要素（`#2`, `#3`...）を追加します。
-6. サイドパネルで **「ページ全体の前提・共通指示」** や **「Playwright風マスキング設定」** を確認し、下部の **「クリップボードにコピー」** をクリックして AI コーディングアシスタントに貼り付けます。
+6. サイドパネルで **「ページ全体の前提・共通指示」** や **「Playwright風マスキング設定」** を確認し、下部の **「クリップボードにコピー」** をクリックして AI コーディングアシスタントに貼り付けます。コピーに成功すると、そのページのマーキングは消去されます。
 
 ### キーボードショートカット一覧
 
@@ -120,7 +170,7 @@ npx vite preview --port 4173
 
 ## 出力JSONスキーマ例 (Output JSON Schema)
 
-サイドパネルから出力される JSON ペイロード（および Markdown 末尾の JSON ブロック）は以下のスキーマに従います。
+サイドパネルまたはボトムバーから出力される JSON ペイロード（および Markdown 末尾の JSON ブロック）は以下のスキーマに従います。
 
 ```json
 {
@@ -210,20 +260,27 @@ dom-prompt-annotator/
 │   ├── demo.html                     # React/Vue/PII/Mask 動作確認用デモページ
 │   └── icons/                        # 拡張機能アイコン (16/48/128px & SVG)
 ├── scripts/
-│   └── build.mjs                     # Vite マルチバンドルビルドスクリプト (SidePanel + Content + Background + Bridge)
+│   ├── build.mjs                     # Vite マルチバンドルビルドスクリプト (SidePanel + Content + Background + Bridge)
+│   ├── e2e.mjs                       # 実Chromeでアンパック済み拡張機能を検証するE2Eハーネス
+│   └── verify-dist.mjs               # dist/ の成果物検証
+├── e2e/
+│   └── fixture.html                  # E2E用の固定テストページ
 ├── src/
 │   ├── types/
 │   │   └── annotation.ts             # データモデル・メッセージング型定義
 │   ├── utils/
 │   │   ├── masker.ts                 # Playwright風マスキング＆PIIサニタイズエンジン
-│   │   ├── storage.ts                # URL単位の chrome.storage.local 永続化ユーティリティ
+│   │   ├── storage.ts                # URL単位の chrome.storage.session ページ状態管理
+│   │   ├── promptFormatter.ts        # LLM向けMarkdownプロンプト＆JSONフォーマッタ
 │   │   └── __tests__/                # masker / storage 単体テスト
 │   ├── background/
-│   │   ├── index.ts                  # Service Worker (Side Panel起動・タブ間メッセージ中継)
+│   │   ├── index.ts                  # Service Worker (サイドパネル起動・タブ間メッセージ中継)
 │   │   └── __tests__/                # Background 単体テスト
 │   ├── content/
 │   │   ├── index.tsx                 # Shadow DOM ホスト (#dpa-root-host) マウント＆Bridge注入
 │   │   ├── OverlayApp.tsx            # ページ上オーバーレイUI (ホバー枠・バッジ・ポップオーバー・マスク枠)
+│   │   ├── FloatingBottomBar.tsx     # Figma UI3 風ボトムバー (選択・デバイス・指示・コピー)
+│   │   ├── AnnotationDrawer.tsx      # 指示一覧・共通前提・マスキング設定ドロワー
 │   │   ├── overlayStyles.ts          # Shadow DOM 内部用スコープドCSS
 │   │   ├── domExtractor.ts           # CSSセレクタ生成・XPath生成・スタイル＆メタデータ抽出
 │   │   ├── mainWorldBridge.ts        # Main World 実行スクリプト (React Fiber / Vue 3 解析)
@@ -232,11 +289,11 @@ dom-prompt-annotator/
 │   │   ├── index.html                # Side Panel エントリHTML
 │   │   ├── main.tsx                  # Side Panel React マウント
 │   │   ├── SidePanelApp.tsx          # Side Panel メインUI (指示管理・マスク設定・プレビュー・コピー)
-│   │   ├── promptFormatter.ts        # LLM向けMarkdownプロンプト＆JSONフォーマッタ
+│   │   ├── promptFormatter.ts        # 共通フォーマッタへの再エクスポート
 │   │   ├── styles.css                # Tailwind CSS スタイル
 │   │   └── __tests__/                # Side Panel / Formatter 単体テスト
 │   └── __tests__/
-│       └── integration.test.tsx      # OverlayApp + SidePanelApp 一気通貫 E2E 結合テスト
+│       └── integration.test.tsx      # OverlayApp + SidePanelApp 一気通貫 結合テスト
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
@@ -248,4 +305,6 @@ dom-prompt-annotator/
 | :--- | :--- |
 | `npm run typecheck` | TypeScript (`tsc --noEmit`) による型チェックを実行 |
 | `npm test` | Vitest + JSDOM による全単体テスト・結合テストを実行 |
+| `npm run test:e2e` | `dist/` をビルドし、実 Chrome（ヘッドレス）でアンパック済み拡張機能のE2Eテストを実行 |
 | `npm run build` | `dist/` ディレクトリへ Chrome 拡張機能一式をビルド |
+| `npm run verify-dist` | ビルド成果物 (`dist/`) の構成を検証 |

@@ -17,14 +17,14 @@ import {
 } from '../utils/promptFormatter';
 import { FloatingBottomBar } from './FloatingBottomBar';
 import { AnnotationDrawer } from './AnnotationDrawer';
-import { RecordingController } from './recordingController';
+import { DevicePreview, PreviewMetrics } from './DevicePreview';
 import {
   applyMaskingToAnnotation,
-  findMaskedElementsOnPage,
   isElementMatchedByMaskSelectors,
   SHADOW_HOST_ID,
 } from '../utils/masker';
 import {
+  clearPageState,
   createDefaultPageState,
   getPageState,
   getStorageKey,
@@ -41,14 +41,14 @@ import {
 } from './domExtractor';
 
 interface HoveredElementInfo {
-  element: HTMLElement;
+  element: Element;
   rect: ElementRect;
   tagLabel: string;
   framework: FrameworkMetadata;
 }
 
 interface PopoverState {
-  targetEl: HTMLElement | null;
+  targetEl: Element | null;
   metadata: ElementMetadata;
   instruction: string;
   maskText: boolean;
@@ -60,14 +60,77 @@ interface HighlightTarget {
   id: number | null;
 }
 
-function getElementRect(el: Element): ElementRect {
+/**
+ * Converts an element's document-relative viewport rect into parent viewport
+ * coordinates, applying the preview iframe scale/offset when active.
+ */
+function computeScreenRect(
+  el: Element,
+  preview: PreviewMetrics | null
+): ElementRect {
   const r = el.getBoundingClientRect();
+  const scale = preview?.doc ? preview.scale : 1;
+  const offsetX = preview?.doc ? preview.rect.left : 0;
+  const offsetY = preview?.doc ? preview.rect.top : 0;
   return {
-    x: Math.round(r.x ?? r.left ?? 0),
-    y: Math.round(r.y ?? r.top ?? 0),
-    width: Math.round(r.width ?? 0),
-    height: Math.round(r.height ?? 0),
+    x: Math.round(offsetX + (r.x ?? r.left ?? 0) * scale),
+    y: Math.round(offsetY + (r.y ?? r.top ?? 0) * scale),
+    width: Math.round((r.width ?? 0) * scale),
+    height: Math.round((r.height ?? 0) * scale),
   };
+}
+
+function resolveEventElement(event: Event): Element | null {
+  const target = event.target as Node | null;
+  if (!target) {
+    return null;
+  }
+  if (target.nodeType === 1) {
+    return target as Element;
+  }
+  if (target.nodeType === 3 && target.parentElement) {
+    return target.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Realm-safe equivalent of `findMaskedElementsOnPage` for the active document
+ * (parent page or preview iframe). Uses `nodeType` instead of `instanceof`.
+ */
+function findMaskedElementsInDocument(
+  doc: Document,
+  selectors: string[]
+): Element[] {
+  if (!doc || !Array.isArray(selectors) || selectors.length === 0) {
+    return [];
+  }
+
+  const matched = new Set<Element>();
+  for (const rawSelector of selectors) {
+    const selector = rawSelector?.trim();
+    if (!selector) {
+      continue;
+    }
+    try {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (node.nodeType !== 1) {
+          return;
+        }
+        if (
+          node.id === SHADOW_HOST_ID ||
+          node.closest(`#${SHADOW_HOST_ID}`) !== null
+        ) {
+          return;
+        }
+        matched.add(node);
+      });
+    } catch {
+      // Ignore invalid selector while the user is typing.
+    }
+  }
+
+  return Array.from(matched);
 }
 
 export function formatElementTagLabel(
@@ -219,6 +282,7 @@ export const OverlayApp: React.FC = () => {
   const [emulationConfig, setEmulationConfig] = useState<DeviceEmulationConfig>(
     () => ({ ...DEFAULT_DEVICE_EMULATION_CONFIG })
   );
+  const [preview, setPreview] = useState<PreviewMetrics | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
@@ -242,12 +306,8 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
-
   const overlayRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const recordingControllerRef = useRef<RecordingController | null>(null);
   const stateRef = useRef<PageAnnotationState>(state);
   stateRef.current = state;
 
@@ -257,43 +317,33 @@ export const OverlayApp: React.FC = () => {
   const isDrawerOpenRef = useRef<boolean>(isDrawerOpen);
   isDrawerOpenRef.current = isDrawerOpen;
 
-  // Initialize recording controller
-  useEffect(() => {
-    recordingControllerRef.current = new RecordingController({
-      getMaskingConfig: () => stateRef.current.maskingConfig,
-      getGlobalInstruction: () => stateRef.current.globalInstruction,
-      onDurationTick: (ms) => setRecordingDurationMs(ms),
-      onStatusChange: (rec) => setIsRecording(rec),
-    });
-  }, []);
+  const previewRef = useRef<PreviewMetrics | null>(preview);
+  previewRef.current = preview;
 
-  // Load initial device emulation state if available
-  useEffect(() => {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      try {
-        chrome.runtime.sendMessage(
-          { type: 'GET_DEVICE_EMULATION' },
-          (response: { ok?: boolean; config?: DeviceEmulationConfig }) => {
-            if (response?.ok && response.config) {
-              setEmulationConfig(response.config);
-            }
-          }
-        );
-      } catch {
-        // Ignore in tests or disconnected runtime
-      }
-    }
-  }, []);
+  const toScreenRect = useCallback(
+    (el: Element): ElementRect => computeScreenRect(el, previewRef.current),
+    []
+  );
 
-  // Load initial state on mount
+  // Page state is ephemeral: never restore markings after a reload/navigation.
   useEffect(() => {
     let mounted = true;
     const url = window.location.href;
-    getPageState(url).then((loaded) => {
+
+    const load = async () => {
+      try {
+        await clearPageState(url);
+      } catch {
+        // Fall through to defaults even if clearing fails.
+      }
+      const loaded = await getPageState(url);
       if (mounted) {
         setState(loaded);
+        safeBroadcastPageState(loaded);
       }
-    });
+    };
+
+    void load();
     return () => {
       mounted = false;
     };
@@ -404,25 +454,29 @@ export const OverlayApp: React.FC = () => {
     });
   }, [updateAndPersistState]);
 
-  const selectPopoverElement = useCallback((nextEl: HTMLElement) => {
-    const currentConfig = stateRef.current.maskingConfig;
-    const nextMeta = extractElementMetadata(nextEl);
-    const autoMask =
-      isElementMatchedByMaskSelectors(nextEl, currentConfig.maskSelectors) ||
-      currentConfig.maskAllText;
+  const selectPopoverElement = useCallback(
+    (nextEl: Element) => {
+      const currentConfig = stateRef.current.maskingConfig;
+      const nextMeta = extractElementMetadata(nextEl);
+      nextMeta.rect = toScreenRect(nextEl);
+      const autoMask =
+        isElementMatchedByMaskSelectors(nextEl, currentConfig.maskSelectors) ||
+        currentConfig.maskAllText;
 
-    setPopover((prev) => {
-      if (!prev) {
-        return null;
-      }
-      return {
-        ...prev,
-        targetEl: nextEl,
-        metadata: nextMeta,
-        maskText: autoMask,
-      };
-    });
-  }, []);
+      setPopover((prev) => {
+        if (!prev) {
+          return null;
+        }
+        return {
+          ...prev,
+          targetEl: nextEl,
+          metadata: nextMeta,
+          maskText: autoMask,
+        };
+      });
+    },
+    [toScreenRect]
+  );
 
   const handleStepParent = useCallback(() => {
     const currentPopover = popoverRef.current;
@@ -453,7 +507,11 @@ export const OverlayApp: React.FC = () => {
     }
 
     const rawMetadata = currentPopover.targetEl
-      ? extractElementMetadata(currentPopover.targetEl)
+      ? (() => {
+          const metadata = extractElementMetadata(currentPopover.targetEl);
+          metadata.rect = toScreenRect(currentPopover.targetEl);
+          return metadata;
+        })()
       : currentPopover.metadata;
 
     const currentAnnotations = stateRef.current.annotations;
@@ -471,24 +529,12 @@ export const OverlayApp: React.FC = () => {
           : item
       );
     } else {
-      const rec = recordingControllerRef.current;
-      const isRec = rec && rec.getIsRecording();
-      const timestampMs = isRec ? rec.getDurationMs() : undefined;
-      const triggerContext = isRec
-        ? rec
-            .getActionLogs()
-            .filter((log) => log.offsetMs <= (timestampMs ?? 0))
-            .slice(-2)
-        : undefined;
-
       const newItem: AnnotationItem = {
         id: currentAnnotations.length + 1,
         instruction: currentPopover.instruction.trim(),
         maskText: currentPopover.maskText,
         createdAt: new Date().toISOString(),
         element: rawMetadata,
-        timestampMs,
-        triggerContext,
       };
       nextAnnotations = [...currentAnnotations, newItem].map((item, idx) => ({
         ...item,
@@ -498,7 +544,7 @@ export const OverlayApp: React.FC = () => {
 
     setPopover(null);
     await updateAndPersistState({ annotations: nextAnnotations });
-  }, [updateAndPersistState]);
+  }, [toScreenRect, updateAndPersistState]);
 
   const handleDeleteAnnotation = useCallback(
     async (idToDelete: number) => {
@@ -522,12 +568,15 @@ export const OverlayApp: React.FC = () => {
       const resolvedEl = findElementBySelectorOrXPath(
         annotation.element.selector,
         annotation.element.xpath,
-        document
+        previewRef.current?.doc ?? document
       );
 
-      const metadata = resolvedEl
+      let metadata = resolvedEl
         ? extractElementMetadata(resolvedEl)
         : annotation.element;
+      if (resolvedEl) {
+        metadata = { ...metadata, rect: toScreenRect(resolvedEl) };
+      }
 
       setPopover({
         targetEl: resolvedEl,
@@ -537,96 +586,77 @@ export const OverlayApp: React.FC = () => {
         editingAnnotationId: annotation.id,
       });
     },
-    []
+    [toScreenRect]
   );
 
   const handleSetDeviceEmulation = useCallback(
-    async (config: Partial<DeviceEmulationConfig>) => {
+    (config: Partial<DeviceEmulationConfig>) => {
       const isRotation = Boolean(
         config.orientation &&
         config.orientation !== emulationConfig.orientation &&
         !config.presetId
       );
+      const nextOrientation = config.orientation ?? emulationConfig.orientation;
 
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-        try {
-          const res = (await chrome.runtime.sendMessage({
-            type: 'SET_DEVICE_EMULATION',
-            config,
-          })) as { ok?: boolean; config?: DeviceEmulationConfig; error?: string } | undefined;
-
-          if (res?.ok && res.config) {
-            setEmulationConfig(res.config);
-            if (isRotation) {
-              const orientLabel =
-                res.config.orientation === 'landscape' ? '横向き' : '縦向き';
-              showToast(
-                `🔄 ${res.config.name} (${orientLabel}: ${res.config.width}×${res.config.height}) に回転しました`
-              );
-            } else {
-              showToast(
-                `📱 ${res.config.name} (${res.config.width}×${res.config.height}) を適用しました`
-              );
-            }
-            return;
-          } else {
-            const errorMsg =
-              res?.error || 'DevToolsが開いているか、CDP接続に失敗しました';
-            showToast(`⚠️ デバイスエミュレーション失敗: ${errorMsg}`, 4000);
-            return;
-          }
-        } catch (err: unknown) {
-          const errorMsg =
-            err instanceof Error
-              ? err.message
-              : 'DevToolsが開いているか、CDP接続に失敗しました';
-          showToast(`⚠️ デバイスエミュレーション失敗: ${errorMsg}`, 4000);
-          return;
-        }
-      }
-
-      // Fallback for tests or disconnected runtime
-      let targetWidth = config.width || emulationConfig.width;
-      let targetHeight = config.height || emulationConfig.height;
+      let targetWidth = config.width ?? emulationConfig.width;
+      let targetHeight = config.height ?? emulationConfig.height;
       if (isRotation) {
         [targetWidth, targetHeight] = [targetHeight, targetWidth];
+      } else if (config.presetId && nextOrientation === 'landscape') {
+        // Presets are defined in portrait; keep the current rotation when switching.
+        [targetWidth, targetHeight] = [targetHeight, targetWidth];
       }
-      const fallbackConfig: DeviceEmulationConfig = {
+      const nextConfig: DeviceEmulationConfig = {
         ...emulationConfig,
         ...config,
+        orientation: nextOrientation,
         width: targetWidth,
         height: targetHeight,
         enabled: true,
       };
-      setEmulationConfig(fallbackConfig);
+      setEmulationConfig(nextConfig);
       if (isRotation) {
         const orientLabel =
-          fallbackConfig.orientation === 'landscape' ? '横向き' : '縦向き';
+          nextConfig.orientation === 'landscape' ? '横向き' : '縦向き';
         showToast(
-          `🔄 ${fallbackConfig.name} (${orientLabel}: ${fallbackConfig.width}×${fallbackConfig.height}) に回転しました`
+          `🔄 ${nextConfig.name} (${orientLabel}: ${nextConfig.width}×${nextConfig.height}) に回転しました`
         );
       } else {
         showToast(
-          `📱 ${fallbackConfig.name} (${fallbackConfig.width}×${fallbackConfig.height}) を適用しました`
+          `📱 ${nextConfig.name} (${nextConfig.width}×${nextConfig.height}) を適用しました`
         );
       }
     },
     [emulationConfig, showToast]
   );
 
-  const handleClearDeviceEmulation = useCallback(async () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'CLEAR_DEVICE_EMULATION',
-        });
-      } catch {
-        // Fallback
-      }
-    }
+  const handleClearDeviceEmulation = useCallback(() => {
     setEmulationConfig({ ...DEFAULT_DEVICE_EMULATION_CONFIG, enabled: false });
+    setPreview(null);
     showToast('🖥️ デスクトップ表示にリセットしました');
   }, [showToast]);
+
+  const handlePreviewMetrics = useCallback((metrics: PreviewMetrics | null) => {
+    setPreview(metrics);
+    setLayoutTick((tick) => tick + 1);
+    setHoveredInfo((prev) =>
+      prev
+        ? { ...prev, rect: computeScreenRect(prev.element, metrics) }
+        : null
+    );
+    setPopover((prev) => {
+      if (!prev || !prev.targetEl) {
+        return prev;
+      }
+      return {
+        ...prev,
+        metadata: {
+          ...prev.metadata,
+          rect: computeScreenRect(prev.targetEl, metrics),
+        },
+      };
+    });
+  }, []);
 
   const handleCopyPrompt = useCallback(
     async (format: 'markdown' | 'json' = 'markdown') => {
@@ -644,6 +674,7 @@ export const OverlayApp: React.FC = () => {
           ? formatAsJson(payload)
           : formatAsMarkdownPrompt(payload);
 
+      let copied = false;
       try {
         if (
           typeof navigator !== 'undefined' &&
@@ -651,62 +682,53 @@ export const OverlayApp: React.FC = () => {
           typeof navigator.clipboard.writeText === 'function'
         ) {
           await navigator.clipboard.writeText(textToCopy);
+          copied = true;
         }
       } catch {
-        // Fallback or ignore in restricted contexts
+        copied = false;
       }
 
-      setIsCopied(true);
-      setToastMessage(
-        format === 'json'
-          ? 'DOM JSONをクリップボードにコピーしました'
-          : 'AIプロンプトをクリップボードにコピーしました'
-      );
-
-      setTimeout(() => {
-        setIsCopied(false);
-      }, 2500);
-
-      setTimeout(() => {
-        setToastMessage(null);
-      }, 3000);
-    },
-    []
-  );
-
-  const handleToggleRecording = useCallback(async () => {
-    const controller = recordingControllerRef.current;
-    if (!controller) return;
-
-    if (controller.getIsRecording()) {
-      const session = controller.stopRecording({
-        annotations: stateRef.current.annotations,
-        maskingConfig: stateRef.current.maskingConfig,
-        globalInstruction: stateRef.current.globalInstruction,
-      });
-      setIsRecording(false);
-      setRecordingDurationMs(0);
-      setToastMessage('録画完了: Studioタブを起動しています...');
-      setTimeout(() => setToastMessage(null), 3000);
-
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      if (!copied && typeof document !== 'undefined' && document.body) {
+        const textarea = document.createElement('textarea');
+        textarea.value = textToCopy;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
         try {
-          chrome.runtime.sendMessage({
-            type: 'SAVE_RECORDING_SESSION',
-            session,
-            openStudioTab: true,
-          });
+          textarea.select();
+          if (typeof document.execCommand === 'function') {
+            copied = document.execCommand('copy');
+          }
         } catch {
-          // Ignore messaging errors
+          copied = false;
+        } finally {
+          textarea.remove();
         }
       }
-    } else {
-      controller.startRecording();
-      setIsRecording(true);
-      setToastMessage('🔴 録画中: アクションとDOM変化を記録しています');
-      setTimeout(() => setToastMessage(null), 2500);
-    }
-  }, []);
+
+      if (!copied) {
+        showToast('コピーに失敗しました。マーキングは保持されています', 3000);
+        return;
+      }
+
+      await updateAndPersistState({ annotations: [] });
+      setPopover(null);
+      setHighlightTarget({ selector: null, id: null });
+      setIsCopied(true);
+      showToast(
+        format === 'json'
+          ? 'JSONをコピーしました。マーキングをクリアしました'
+          : 'コピーしました。マーキングをクリアしました'
+      );
+
+      window.setTimeout(() => {
+        setIsCopied(false);
+      }, 2500);
+    },
+    [showToast, updateAndPersistState]
+  );
 
   const handleUpdateGlobalInstruction = useCallback(
     async (globalInstruction: string) => {
@@ -737,7 +759,7 @@ export const OverlayApp: React.FC = () => {
     const targetEl = findElementBySelectorOrXPath(
       selector,
       matchingAnn?.element.xpath,
-      document
+      previewRef.current?.doc ?? document
     );
     if (targetEl && typeof targetEl.scrollIntoView === 'function') {
       targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -746,35 +768,27 @@ export const OverlayApp: React.FC = () => {
     setLayoutTick((t) => t + 1);
   }, []);
 
-  // Mousemove & Click capture listeners for inspectMode
-  useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
+  const processInspectMouseMove = useCallback(
+    (event: MouseEvent) => {
       if (!stateRef.current.isVisible || !stateRef.current.inspectMode) {
         return;
       }
-      if (isEventFromOverlay(event)) {
+
+      const targetEl = resolveEventElement(event);
+      if (!targetEl) {
         setHoveredInfo(null);
         return;
       }
 
-      const rawTarget = event.target;
-      const targetEl =
-        rawTarget instanceof HTMLElement
-          ? rawTarget
-          : rawTarget instanceof Element
-            ? (rawTarget.closest('*') as HTMLElement | null)
-            : null;
-
+      const ownerDoc = targetEl.ownerDocument;
       if (
-        !targetEl ||
-        targetEl === document.documentElement ||
-        targetEl === document.body
+        targetEl === ownerDoc.documentElement ||
+        targetEl === ownerDoc.body
       ) {
         setHoveredInfo(null);
         return;
       }
 
-      const rect = getElementRect(targetEl);
       const className =
         typeof targetEl.className === 'string'
           ? targetEl.className
@@ -784,33 +798,25 @@ export const OverlayApp: React.FC = () => {
         targetEl.id,
         className
       );
-      const framework = requestFrameworkMetadata(targetEl);
 
       setHoveredInfo({
         element: targetEl,
-        rect,
+        rect: toScreenRect(targetEl),
         tagLabel,
-        framework,
+        framework: requestFrameworkMetadata(targetEl),
       });
-    };
+    },
+    [toScreenRect]
+  );
 
-    const handleClickCapture = (event: MouseEvent) => {
+  const processInspectClick = useCallback(
+    (event: MouseEvent) => {
       if (!stateRef.current.isVisible || !stateRef.current.inspectMode) {
         return;
       }
-      if (isEventFromOverlay(event)) {
-        return;
-      }
 
-      const rawTarget = event.target;
-      const targetEl =
-        rawTarget instanceof HTMLElement
-          ? rawTarget
-          : rawTarget instanceof Element
-            ? (rawTarget.closest('*') as HTMLElement | null)
-            : null;
-
-      if (!targetEl || targetEl === document.documentElement) {
+      const targetEl = resolveEventElement(event);
+      if (!targetEl || targetEl === targetEl.ownerDocument.documentElement) {
         return;
       }
 
@@ -822,6 +828,7 @@ export const OverlayApp: React.FC = () => {
 
       const currentConfig = stateRef.current.maskingConfig;
       const metadata = extractElementMetadata(targetEl);
+      metadata.rect = toScreenRect(targetEl);
       const autoMask =
         isElementMatchedByMaskSelectors(targetEl, currentConfig.maskSelectors) ||
         currentConfig.maskAllText;
@@ -834,6 +841,32 @@ export const OverlayApp: React.FC = () => {
         maskText: autoMask,
         editingAnnotationId: null,
       });
+    },
+    [toScreenRect]
+  );
+
+  // Parent-document mousemove & click capture listeners for inspectMode.
+  // They stay inert while the device preview document is the active target.
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      if (previewRef.current?.doc) {
+        return;
+      }
+      if (isEventFromOverlay(event)) {
+        setHoveredInfo(null);
+        return;
+      }
+      processInspectMouseMove(event);
+    };
+
+    const handleClickCapture = (event: MouseEvent) => {
+      if (previewRef.current?.doc) {
+        return;
+      }
+      if (isEventFromOverlay(event)) {
+        return;
+      }
+      processInspectClick(event);
     };
 
     window.addEventListener('mousemove', handleMouseMove, true);
@@ -843,7 +876,30 @@ export const OverlayApp: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('click', handleClickCapture, true);
     };
-  }, [isEventFromOverlay]);
+  }, [isEventFromOverlay, processInspectClick, processInspectMouseMove]);
+
+  // Inspect listeners inside the same-origin preview iframe document.
+  useEffect(() => {
+    const previewDoc = preview?.doc;
+    if (!previewDoc) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      processInspectMouseMove(event);
+    };
+    const handleClickCapture = (event: MouseEvent) => {
+      processInspectClick(event);
+    };
+
+    previewDoc.addEventListener('mousemove', handleMouseMove, true);
+    previewDoc.addEventListener('click', handleClickCapture, true);
+
+    return () => {
+      previewDoc.removeEventListener('mousemove', handleMouseMove, true);
+      previewDoc.removeEventListener('click', handleClickCapture, true);
+    };
+  }, [preview?.doc, processInspectClick, processInspectMouseMove]);
 
   // Keyboard shortcuts: Alt+S, Escape, Alt+ArrowUp, Alt+ArrowDown
   useEffect(() => {
@@ -927,7 +983,7 @@ export const OverlayApp: React.FC = () => {
         prev
           ? {
               ...prev,
-              rect: getElementRect(prev.element),
+              rect: computeScreenRect(prev.element, previewRef.current),
             }
           : null
       );
@@ -939,7 +995,7 @@ export const OverlayApp: React.FC = () => {
           ...prev,
           metadata: {
             ...prev.metadata,
-            rect: getElementRect(prev.targetEl),
+            rect: computeScreenRect(prev.targetEl, previewRef.current),
           },
         };
       });
@@ -954,7 +1010,7 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
-  // Sync with chrome.storage.onChanged
+  // Sync with chrome.storage.onChanged (session area = ephemeral page state)
   useEffect(() => {
     if (
       typeof chrome === 'undefined' ||
@@ -968,7 +1024,7 @@ export const OverlayApp: React.FC = () => {
       changes: { [key: string]: chrome.storage.StorageChange },
       areaName: string
     ) => {
-      if (areaName !== 'local') {
+      if (areaName !== 'session') {
         return;
       }
       const key = getStorageKey(window.location.href);
@@ -1150,6 +1206,7 @@ export const OverlayApp: React.FC = () => {
           }).then((updated) => {
             setState(updated);
             setPopover(null);
+            setHighlightTarget({ selector: null, id: null });
             sendResponse(updated);
           });
           return true;
@@ -1192,7 +1249,7 @@ export const OverlayApp: React.FC = () => {
           const targetEl = findElementBySelectorOrXPath(
             message.selector,
             matchingAnn?.element.xpath,
-            document
+            previewRef.current?.doc ?? document
           );
           if (targetEl && typeof targetEl.scrollIntoView === 'function') {
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1218,31 +1275,6 @@ export const OverlayApp: React.FC = () => {
           return false;
         }
 
-        case 'DEVICE_EMULATION_UPDATED': {
-          if (message.config) {
-            setEmulationConfig(message.config);
-          }
-          sendResponse({ ok: true });
-          return false;
-        }
-
-        case 'START_RECORDING': {
-          if (!recordingControllerRef.current?.getIsRecording()) {
-            recordingControllerRef.current?.startRecording();
-            setIsRecording(true);
-          }
-          sendResponse({ ok: true });
-          return false;
-        }
-
-        case 'STOP_RECORDING': {
-          if (recordingControllerRef.current?.getIsRecording()) {
-            void handleToggleRecording();
-          }
-          sendResponse({ ok: true });
-          return false;
-        }
-
         default:
           return false;
       }
@@ -1254,6 +1286,8 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
+  const activeDoc = preview?.doc ?? document;
+
   // Compute live bounding rects for annotated elements
   const renderedAnnotations = useMemo(() => {
     void layoutTick;
@@ -1262,9 +1296,9 @@ export const OverlayApp: React.FC = () => {
       const liveEl = findElementBySelectorOrXPath(
         ann.element.selector,
         ann.element.xpath,
-        document
+        activeDoc
       );
-      const rect = liveEl ? getElementRect(liveEl) : ann.element.rect;
+      const rect = liveEl ? toScreenRect(liveEl) : ann.element.rect;
       return {
         raw: ann,
         masked: maskedAnn,
@@ -1272,7 +1306,14 @@ export const OverlayApp: React.FC = () => {
         rect,
       };
     });
-  }, [state.annotations, state.maskingConfig, layoutTick]);
+  }, [
+    state.annotations,
+    state.maskingConfig,
+    activeDoc,
+    layoutTick,
+    preview,
+    toScreenRect,
+  ]);
 
   // Compute Playwright-style visual mask overlays
   const visualMaskRects = useMemo(() => {
@@ -1281,11 +1322,11 @@ export const OverlayApp: React.FC = () => {
       return [];
     }
 
-    const selectorMatchedElements = findMaskedElementsOnPage(
-      document,
+    const selectorMatchedElements = findMaskedElementsInDocument(
+      activeDoc,
       state.maskingConfig.maskSelectors
     );
-    const seenElements = new Set<HTMLElement>();
+    const seenElements = new Set<Element>();
     const results: Array<{
       key: string;
       rect: ElementRect;
@@ -1300,7 +1341,7 @@ export const OverlayApp: React.FC = () => {
       const sel = generateCssSelector(el);
       results.push({
         key: `sel-${sel}-${results.length}`,
-        rect: getElementRect(el),
+        rect: toScreenRect(el),
         selector: sel,
       });
     }
@@ -1324,11 +1365,14 @@ export const OverlayApp: React.FC = () => {
 
     return results;
   }, [
+    activeDoc,
     state.maskingConfig.visualMaskEnabled,
     state.maskingConfig.maskSelectors,
     state.maskingConfig.maskAllText,
     renderedAnnotations,
     layoutTick,
+    preview,
+    toScreenRect,
   ]);
 
   // Compute active highlight box from Side Panel
@@ -1351,15 +1395,22 @@ export const OverlayApp: React.FC = () => {
       const el = findElementBySelectorOrXPath(
         highlightTarget.selector,
         undefined,
-        document
+        activeDoc
       );
       if (el) {
-        return getElementRect(el);
+        return toScreenRect(el);
       }
     }
 
     return null;
-  }, [highlightTarget, renderedAnnotations, layoutTick]);
+  }, [
+    activeDoc,
+    highlightTarget,
+    renderedAnnotations,
+    layoutTick,
+    preview,
+    toScreenRect,
+  ]);
 
   const parentCandidate = popover?.targetEl
     ? getParentCandidate(popover.targetEl)
@@ -1434,7 +1485,7 @@ export const OverlayApp: React.FC = () => {
               findElementBySelectorOrXPath(
                 raw.element.selector,
                 raw.element.xpath,
-                document
+                activeDoc
               ),
               state.maskingConfig.maskSelectors
             ));
@@ -1693,12 +1744,12 @@ export const OverlayApp: React.FC = () => {
           const resolvedEl = findElementBySelectorOrXPath(
             ann.element.selector,
             ann.element.xpath,
-            document
+            previewRef.current?.doc ?? document
           );
           setPopover({
             targetEl: resolvedEl,
             metadata: resolvedEl
-              ? extractElementMetadata(resolvedEl)
+              ? { ...extractElementMetadata(resolvedEl), rect: toScreenRect(resolvedEl) }
               : ann.element,
             instruction: ann.instruction,
             maskText: ann.maskText,
@@ -1707,6 +1758,15 @@ export const OverlayApp: React.FC = () => {
           setIsDrawerOpen(false);
         }}
       />
+
+      {/* In-page device preview iframe (fixed overlay; bar stays put) */}
+      {emulationConfig.enabled && (
+        <DevicePreview
+          config={emulationConfig}
+          onClose={handleClearDeviceEmulation}
+          onMetricsChange={handlePreviewMetrics}
+        />
+      )}
 
       {/* Figma UI3 Floating Bottom Bar */}
       <FloatingBottomBar
@@ -1722,9 +1782,6 @@ export const OverlayApp: React.FC = () => {
         onClearDeviceEmulation={handleClearDeviceEmulation}
         onCopyPrompt={handleCopyPrompt}
         isCopied={isCopied}
-        isRecording={isRecording}
-        recordingDurationMs={recordingDurationMs}
-        onToggleRecording={handleToggleRecording}
         onClose={handleCloseOverlay}
       />
 

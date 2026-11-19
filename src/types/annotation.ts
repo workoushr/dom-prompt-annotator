@@ -48,58 +48,12 @@ export interface ElementMetadata {
   framework: FrameworkMetadata | null;
 }
 
-export type UserActionKind =
-  | 'click'
-  | 'input'
-  | 'scroll'
-  | 'navigation'
-  | 'mutation_add'
-  | 'mutation_remove';
-
-export interface UserActionLogEntry {
-  id: string;
-  offsetMs: number;
-  kind: UserActionKind;
-  targetSelector: string;
-  targetLabel?: string;
-  summary: string;
-  inputValue?: string;
-  scrollPosition?: { x: number; y: number };
-  elementSnapshot?: {
-    tagName: string;
-    id?: string;
-    className?: string;
-    textContent?: string;
-    outerHTML?: string;
-  };
-}
-
 export interface AnnotationItem {
   id: number;
   instruction: string;
   maskText: boolean;
   createdAt: string;
   element: ElementMetadata;
-  timestampMs?: number;
-  triggerContext?: UserActionLogEntry[];
-}
-
-export interface RecordingSession {
-  sessionId: string;
-  url: string;
-  title: string;
-  createdAt: string;
-  durationMs: number;
-  viewport: {
-    width: number;
-    height: number;
-  };
-  globalInstruction?: string;
-  maskingConfig: MaskingConfig;
-  rrwebEvents: unknown[];
-  actionLogs: UserActionLogEntry[];
-  annotations: AnnotationItem[];
-  initialDomSnapshot?: string;
 }
 
 export interface PageContext {
@@ -242,39 +196,4 @@ export type ExtensionMessage =
   | { type: 'HIGHLIGHT_ELEMENT'; selector: string | null; id?: number | null }
   | { type: 'SCROLL_TO_ELEMENT'; selector: string; id?: number }
   | { type: 'GET_LIVE_PAGE_CONTEXT' }
-  | {
-      type: 'SET_DEVICE_EMULATION';
-      tabId?: number;
-      config: Partial<DeviceEmulationConfig>;
-    }
-  | { type: 'CLEAR_DEVICE_EMULATION'; tabId?: number }
-  | { type: 'GET_DEVICE_EMULATION'; tabId?: number }
-  | {
-      type: 'DEVICE_EMULATION_UPDATED';
-      tabId?: number;
-      config: DeviceEmulationConfig;
-      reason?: string;
-    }
-  | { type: 'START_RECORDING'; url?: string }
-  | { type: 'STOP_RECORDING'; url?: string }
-  | {
-      type: 'SAVE_RECORDING_SESSION';
-      session: RecordingSession;
-      openStudioTab?: boolean;
-    }
-  | { type: 'GET_RECORDING_SESSION'; sessionId: string }
-  | {
-      type: 'SAVE_STUDIO_ANNOTATION';
-      sessionId: string;
-      annotation: AnnotationItem;
-    }
-  | {
-      type: 'DELETE_STUDIO_ANNOTATION';
-      sessionId: string;
-      annotationId: number;
-    }
-  | {
-      type: 'UPDATE_STUDIO_SESSION';
-      sessionId: string;
-      patch: Partial<RecordingSession>;
-    };
+  | { type: 'ENSURE_STATE_ACCESS' };

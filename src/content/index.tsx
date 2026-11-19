@@ -3,46 +3,14 @@ import { createRoot, Root } from 'react-dom/client';
 import { SHADOW_HOST_ID } from '../utils/masker';
 import { OVERLAY_CSS } from './overlayStyles';
 import { OverlayApp } from './OverlayApp';
+import {
+  BRIDGE_SCRIPT_ID,
+  injectMainWorldBridgeScript,
+} from './mainWorldInjection';
 
-export const BRIDGE_SCRIPT_ID = 'dpa-main-world-bridge-script';
+export { BRIDGE_SCRIPT_ID, injectMainWorldBridgeScript };
 
 let reactRoot: Root | null = null;
-
-export function injectMainWorldBridgeScript(doc: Document = document): void {
-  if (typeof doc === 'undefined' || !doc.documentElement) {
-    return;
-  }
-
-  if (doc.getElementById(BRIDGE_SCRIPT_ID)) {
-    return;
-  }
-
-  if (
-    typeof chrome === 'undefined' ||
-    !chrome?.runtime ||
-    typeof chrome.runtime.getURL !== 'function'
-  ) {
-    return;
-  }
-
-  try {
-    const scriptUrl = chrome.runtime.getURL('mainWorldBridge.js');
-    if (!scriptUrl) {
-      return;
-    }
-
-    const script = doc.createElement('script');
-    script.id = BRIDGE_SCRIPT_ID;
-    script.src = scriptUrl;
-    script.async = false;
-    script.onload = () => {
-      // Keep or remove script tag; keeping id prevents duplicate injection
-    };
-    (doc.documentElement || doc.head || doc.body).appendChild(script);
-  } catch {
-    // Gracefully skip if extension context is invalidated or unavailable
-  }
-}
 
 export function mountOverlayShadowDom(doc: Document = document): {
   host: HTMLElement;

@@ -58,7 +58,7 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     return defaultProps;
   };
 
-  it('renders all 7 elements of Figma UI3 floating bottom bar in expanded state (including close button)', async () => {
+  it('renders all 6 elements of Figma UI3 floating bottom bar in expanded state (including close button)', async () => {
     await renderComponent({ annotationCount: 3 });
 
     const bottomBar = container.querySelector('[data-testid="dpa-bottom-bar"]');
@@ -75,26 +75,21 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     expect(deviceBtn).not.toBeNull();
     expect(deviceBtn?.textContent).toContain('デバイス切替');
 
-    // 3. REC button placeholder
-    const recBtn = container.querySelector('[data-testid="dpa-bottom-bar-rec-btn"]');
-    expect(recBtn).not.toBeNull();
-    expect(recBtn?.textContent).toContain('REC');
-
-    // 4. Drawer count button
+    // 3. Drawer count button
     const drawerBtn = container.querySelector('[data-testid="dpa-bottom-bar-drawer-btn"]');
     expect(drawerBtn).not.toBeNull();
     expect(drawerBtn?.textContent).toContain('3件');
 
-    // 5. Copy prompt button
+    // 4. Copy prompt button
     const copyBtn = container.querySelector('[data-testid="dpa-bottom-bar-copy-btn"]');
     expect(copyBtn).not.toBeNull();
     expect(copyBtn?.textContent).toContain('プロンプトコピー');
 
-    // 6. Minimize button
+    // 5. Minimize button
     const minimizeBtn = container.querySelector('[data-testid="dpa-bottom-bar-minimize-btn"]');
     expect(minimizeBtn).not.toBeNull();
 
-    // 7. Close button
+    // 6. Close button
     const closeBtn = container.querySelector('[data-testid="dpa-bottom-bar-close-btn"]');
     expect(closeBtn).not.toBeNull();
   });
@@ -237,28 +232,6 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       minPill.click();
     });
     expect(onToggleMinimize).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders recording state with MM:SS duration (without milliseconds or decimals)', async () => {
-    const onToggleRecording = vi.fn();
-    // 65432 ms -> 01:05 (1 min 5 sec)
-    await renderComponent({
-      isRecording: true,
-      recordingDurationMs: 65432,
-      onToggleRecording,
-    });
-
-    const recBtn = container.querySelector(
-      '[data-testid="dpa-bottom-bar-rec-btn"]'
-    ) as HTMLButtonElement;
-    expect(recBtn).not.toBeNull();
-    expect(recBtn.textContent).toContain('01:05');
-    expect(recBtn.textContent).not.toContain('.');
-
-    await act(async () => {
-      recBtn.click();
-    });
-    expect(onToggleRecording).toHaveBeenCalledTimes(1);
   });
 
   describe('Shadow DOM event retargeting and outside click handling', () => {
@@ -533,8 +506,7 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     expect(OVERLAY_CSS).toContain('@media (max-width: 480px)');
   });
 
-  it('displays active badge and dot, and calls onShowToast with new orientation and swapped dimensions on rotation (Issue 6)', async () => {
-    const onShowToast = vi.fn();
+  it('displays active badge and dot, and delegates rotation to onSetDeviceEmulation', async () => {
     const onSetDeviceEmulation = vi.fn();
 
     const emulatedConfig: DeviceEmulationConfig = {
@@ -551,7 +523,6 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
 
     await renderComponent({
       emulationConfig: emulatedConfig,
-      onShowToast,
       onSetDeviceEmulation,
     });
 
@@ -567,7 +538,6 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       rotateBtn.click();
     });
 
-    expect(onShowToast).toHaveBeenCalledWith('🔄 iPhone SE (横向き: 667×375) に回転しました');
     expect(onSetDeviceEmulation).toHaveBeenCalledWith({ orientation: 'landscape' });
   });
 });

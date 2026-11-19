@@ -12,12 +12,10 @@ import {
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
-import { resetDebuggerManagerForTests } from '../debuggerManager';
 
 describe('Background Service Worker (src/background/index.ts)', () => {
   beforeEach(() => {
     resetMemoryStoreForTests();
-    resetDebuggerManagerForTests();
   });
 
   afterEach(() => {
@@ -39,13 +37,19 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(isRestrictedTabUrl('http://localhost:3000/app')).toBe(false);
   });
 
-  it('configures sidePanel.setPanelBehavior({ openPanelOnActionClick: false }) on install', async () => {
+  it('configures sidePanel.setPanelBehavior({ openPanelOnActionClick: true }) on install', async () => {
     const setPanelBehaviorMock = vi.fn().mockResolvedValue(undefined);
+    const setAccessLevelMock = vi.fn().mockResolvedValue(undefined);
     let installedCallback: (() => void) | null = null;
 
     (globalThis as Record<string, unknown>).chrome = {
       sidePanel: {
         setPanelBehavior: setPanelBehaviorMock,
+      },
+      storage: {
+        session: {
+          setAccessLevel: setAccessLevelMock,
+        },
       },
       runtime: {
         onInstalled: {
@@ -66,7 +70,10 @@ describe('Background Service Worker (src/background/index.ts)', () => {
 
     registerBackgroundListeners();
     expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: false,
+      openPanelOnActionClick: true,
+    });
+    expect(setAccessLevelMock).toHaveBeenCalledWith({
+      accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
     });
 
     setPanelBehaviorMock.mockClear();
@@ -74,11 +81,11 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     installedCallback!();
     await configureSidePanelBehavior();
     expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: false,
+      openPanelOnActionClick: true,
     });
   });
 
-  it('toggles inspectMode in storage and sends SET_INSPECT_MODE without opening side panel when action icon is clicked', async () => {
+  it('always enables inspectMode and sends SET_INSPECT_MODE on action click without opening the panel manually', async () => {
     const openSidePanelMock = vi.fn().mockResolvedValue(undefined);
     const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
@@ -92,7 +99,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     };
 
     const tabUrl = 'https://example.com/products?page=2';
-    // Explicitly start from inspectMode: false to verify toggling to true
+    // Explicitly start from inspectMode: false to verify enabling (not toggling)
     await savePageState(tabUrl, { inspectMode: false });
 
     await handleActionClicked({
@@ -104,12 +111,39 @@ describe('Background Service Worker (src/background/index.ts)', () => {
 
     const state = await getPageState(tabUrl);
     expect(state.inspectMode).toBe(true);
+    expect(state.isVisible).toBe(true);
 
     expect(sendMessageMock).toHaveBeenCalledWith(42, {
       type: 'SET_INSPECT_MODE',
       enabled: true,
       url: tabUrl,
     });
+  });
+
+  it('keeps inspectMode enabled across repeated action clicks (idempotent, never toggles off)', async () => {
+    const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
+
+    (globalThis as Record<string, unknown>).chrome = {
+      tabs: {
+        sendMessage: sendMessageMock,
+      },
+    };
+
+    const tabUrl = 'https://example.com/idempotent';
+    await handleActionClicked({ id: 7, url: tabUrl } as chrome.tabs.Tab);
+    await handleActionClicked({ id: 7, url: tabUrl } as chrome.tabs.Tab);
+
+    const state = await getPageState(tabUrl);
+    expect(state.inspectMode).toBe(true);
+    expect(state.isVisible).toBe(true);
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    for (const call of sendMessageMock.mock.calls) {
+      expect(call[1]).toMatchObject({
+        type: 'SET_INSPECT_MODE',
+        enabled: true,
+        url: tabUrl,
+      });
+    }
   });
 
   it('re-opens overlay UI and enables inspectMode when action icon is clicked and UI was closed (isVisible: false)', async () => {
@@ -253,102 +287,109 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(sendResponseForForward).toHaveBeenCalledWith({ scrolled: true });
   });
 
-  it('routes SET_DEVICE_EMULATION, GET_DEVICE_EMULATION, and CLEAR_DEVICE_EMULATION messages', async () => {
-    const attachMock = vi.fn().mockResolvedValue(undefined);
-    const sendCommandMock = vi.fn().mockResolvedValue({});
-    const detachMock = vi.fn().mockResolvedValue(undefined);
-    const tabsSendMessageMock = vi.fn().mockResolvedValue(undefined);
-
-    (globalThis as Record<string, unknown>).chrome = {
-      debugger: {
-        attach: attachMock,
-        sendCommand: sendCommandMock,
-        detach: detachMock,
-      },
-      tabs: {
-        query: vi
-          .fn()
-          .mockResolvedValue([{ id: 10, url: 'https://example.com/test' }]),
-        sendMessage: tabsSendMessageMock,
-      },
-    };
-
-    // 1. SET_DEVICE_EMULATION
-    const setResponse = vi.fn();
-    const handledSet = handleRuntimeMessage(
-      {
-        type: 'SET_DEVICE_EMULATION',
-        tabId: 10,
-        config: { presetId: 'iphone-se' },
-      },
-      {} as chrome.runtime.MessageSender,
-      setResponse
-    );
-    expect(handledSet).toBe(true);
-
-    await new Promise((r) => setTimeout(r, 20));
-    expect(attachMock).toHaveBeenCalledWith({ tabId: 10 }, '1.3');
-    expect(sendCommandMock).toHaveBeenCalledWith(
-      { tabId: 10 },
-      'Emulation.setDeviceMetricsOverride',
-      expect.objectContaining({ width: 375, height: 667 })
-    );
-    expect(setResponse).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: true,
-        config: expect.objectContaining({ presetId: 'iphone-se', enabled: true }),
-      })
-    );
-
-    // 2. GET_DEVICE_EMULATION
-    const getResponse = vi.fn();
-    const handledGet = handleRuntimeMessage(
-      { type: 'GET_DEVICE_EMULATION', tabId: 10 },
-      {} as chrome.runtime.MessageSender,
-      getResponse
-    );
-    expect(handledGet).toBe(true);
-
-    await new Promise((r) => setTimeout(r, 20));
-    expect(getResponse).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: true,
-        config: expect.objectContaining({ presetId: 'iphone-se', enabled: true }),
-      })
-    );
-
-    // 3. CLEAR_DEVICE_EMULATION
-    const clearResponse = vi.fn();
-    const handledClear = handleRuntimeMessage(
-      { type: 'CLEAR_DEVICE_EMULATION', tabId: 10 },
-      {} as chrome.runtime.MessageSender,
-      clearResponse
-    );
-    expect(handledClear).toBe(true);
-
-    await new Promise((r) => setTimeout(r, 20));
-    expect(detachMock).toHaveBeenCalledWith({ tabId: 10 });
-    expect(clearResponse).toHaveBeenCalledWith({ ok: true });
-  });
-
-  it('registers debugger onDetach listener on background listener initialization', () => {
-    const addListenerMock = vi.fn();
-    (globalThis as Record<string, unknown>).chrome = {
-      debugger: {
-        onDetach: {
-          addListener: addListenerMock,
+  it('clears page annotations when a tab starts loading (refresh or navigation)', async () => {
+    const url = 'https://example.com/refresh';
+    await savePageState(url, {
+      inspectMode: false,
+      annotations: [
+        {
+          id: 1,
+          instruction: 'Make the CTA larger',
+          maskText: false,
+          createdAt: '2026-11-07T00:00:00.000Z',
+          element: {
+            tagName: 'button',
+            id: 'cta',
+            className: 'cta',
+            selector: '#cta',
+            xpath: '//*[@id="cta"]',
+            attributes: { id: 'cta' },
+            textContent: 'Buy',
+            outerHTMLSnippet: '<button id="cta">Buy</button>',
+            rect: { x: 0, y: 0, width: 10, height: 10 },
+            computedStyles: {},
+            framework: null,
+          },
         },
-      },
-      runtime: {
-        onInstalled: { addListener: vi.fn() },
-        onMessage: { addListener: vi.fn() },
-      },
-      action: {
-        onClicked: { addListener: vi.fn() },
+      ],
+    });
+
+    let updatedCallback:
+      | ((
+          tabId: number,
+          changeInfo: chrome.tabs.TabChangeInfo,
+          tab: chrome.tabs.Tab
+        ) => void)
+      | null = null;
+
+    (globalThis as Record<string, unknown>).chrome = {
+      tabs: {
+        onUpdated: {
+          addListener: vi.fn(
+            (
+              cb: (
+                tabId: number,
+                changeInfo: chrome.tabs.TabChangeInfo,
+                tab: chrome.tabs.Tab
+              ) => void
+            ) => {
+              updatedCallback = cb;
+            }
+          ),
+        },
       },
     };
 
     registerBackgroundListeners();
-    expect(addListenerMock).toHaveBeenCalledTimes(1);
+    expect(updatedCallback).not.toBeNull();
+
+    // A completed load must not wipe annotations.
+    updatedCallback!(
+      1,
+      { status: 'complete' },
+      { id: 1, url } as chrome.tabs.Tab
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect((await getPageState(url)).annotations).toHaveLength(1);
+
+    updatedCallback!(1, { status: 'loading', url }, {
+      id: 1,
+      url,
+    } as chrome.tabs.Tab);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const afterReload = await getPageState(url);
+    expect(afterReload.annotations).toEqual([]);
+    expect(afterReload.inspectMode).toBe(true);
+  });
+
+  it('grants untrusted contexts access to session storage on ENSURE_STATE_ACCESS', async () => {
+    const setAccessLevelMock = vi.fn().mockResolvedValue(undefined);
+
+    (globalThis as Record<string, unknown>).chrome = {
+      storage: {
+        session: {
+          setAccessLevel: setAccessLevelMock,
+        },
+      },
+    };
+
+    const sendResponse = vi.fn();
+    const handled = handleRuntimeMessage(
+      { type: 'ENSURE_STATE_ACCESS' },
+      {} as chrome.runtime.MessageSender,
+      sendResponse
+    );
+
+    expect(handled).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(setAccessLevelMock).toHaveBeenCalledWith({
+      accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
+    });
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
   });
 });

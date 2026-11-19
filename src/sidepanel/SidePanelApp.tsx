@@ -29,6 +29,7 @@ import {
   getPageState,
   getStorageKey,
   normalizeUrlKey,
+  PAGE_STATE_STORAGE_AREA,
   savePageState,
 } from '../utils/storage';
 import {
@@ -204,7 +205,7 @@ export const SidePanelApp: React.FC = () => {
       changes: { [key: string]: chrome.storage.StorageChange },
       areaName: string
     ) => {
-      if (areaName !== 'local') {
+      if (areaName !== PAGE_STATE_STORAGE_AREA) {
         return;
       }
       const key = getStorageKey(activeUrlRef.current);
@@ -489,30 +490,42 @@ export const SidePanelApp: React.FC = () => {
     }
 
     if (!copiedOk && typeof document !== 'undefined') {
+      let tempTextarea: HTMLTextAreaElement | null = null;
       try {
-        const tempTextarea = document.createElement('textarea');
+        tempTextarea = document.createElement('textarea');
         tempTextarea.value = formattedOutput;
         tempTextarea.style.position = 'fixed';
         tempTextarea.style.opacity = '0';
         document.body.appendChild(tempTextarea);
         tempTextarea.select();
-        if (typeof document.execCommand === 'function') {
-          document.execCommand('copy');
-        }
-        tempTextarea.remove();
+        copiedOk =
+          typeof document.execCommand === 'function' &&
+          document.execCommand('copy') === true;
       } catch {
-        // Ignore fallback error
+        copiedOk = false;
+      } finally {
+        tempTextarea?.remove();
       }
     }
 
-    setCopied(true);
-    if (copyTimeoutRef.current) {
-      clearTimeout(copyTimeoutRef.current);
+    if (!copiedOk) {
+      // Do not touch annotations or show success unless the copy really happened.
+      setCopied(false);
+      return;
     }
+
+    const url = activeUrlRef.current;
+    const updated = await savePageState(url, { annotations: [] });
+    stateRef.current = updated;
+    setState(updated);
+    await sendMessageToActiveTab({ type: 'CLEAR_ANNOTATIONS', url });
+
+    setCopied(true);
+    clearTimeout(copyTimeoutRef.current ?? undefined);
     copyTimeoutRef.current = setTimeout(() => {
       setCopied(false);
     }, 2000);
-  }, [formattedOutput]);
+  }, [formattedOutput, sendMessageToActiveTab]);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 text-xs select-none">

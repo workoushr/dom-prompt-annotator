@@ -33,11 +33,7 @@ export interface FloatingBottomBarProps {
   onClearDeviceEmulation: () => Promise<void> | void;
   onCopyPrompt: (format?: 'markdown' | 'json') => Promise<void> | void;
   isCopied?: boolean;
-  isRecording?: boolean;
-  recordingDurationMs?: number;
-  onToggleRecording?: () => void;
   onClose?: () => void;
-  onShowToast?: (message: string) => void;
 }
 
 export const isInsideRef = (
@@ -65,11 +61,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   onClearDeviceEmulation,
   onCopyPrompt,
   isCopied = false,
-  isRecording = false,
-  recordingDurationMs = 0,
-  onToggleRecording,
   onClose,
-  onShowToast,
 }) => {
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [copyFormatMenuOpen, setCopyFormatMenuOpen] = useState(false);
@@ -122,12 +114,6 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
     e.stopPropagation();
     const nextOrientation =
       emulationConfig.orientation === 'landscape' ? 'portrait' : 'landscape';
-    const orientLabel = nextOrientation === 'landscape' ? '横向き' : '縦向き';
-    const swappedWidth = emulationConfig.height;
-    const swappedHeight = emulationConfig.width;
-    onShowToast?.(
-      `🔄 ${emulationConfig.name} (${orientLabel}: ${swappedWidth}×${swappedHeight}) に回転しました`
-    );
     await onSetDeviceEmulation({
       orientation: nextOrientation,
     });
@@ -237,7 +223,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
           }`}
           data-testid="dpa-bottom-bar-device-btn"
           onClick={() => setDeviceMenuOpen(!deviceMenuOpen)}
-          title="Viewportエミュレーション (CDP)"
+          title="ビューポートプレビュー (ページ内iframe)"
         >
           {getDeviceIcon()}
           <span className="dpa-btn-device-label">{currentDeviceLabel}</span>
@@ -262,22 +248,22 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
           />
         </button>
 
-        {/* Orientation Toggle Button (↻) */}
-        {emulationConfig.enabled && (
-          <button
-            type="button"
-            className="dpa-btn dpa-btn-rotate"
-            data-testid="dpa-device-rotate-btn"
-            onClick={handleToggleOrientation}
-            title={`画面回転 (${
-              emulationConfig.orientation === 'landscape'
-                ? '横向き'
-                : '縦向き'
-            })`}
-          >
-            <RotateCw className="dpa-icon-xs" />
-          </button>
-        )}
+        {/* Orientation Toggle Button (↻) — always laid out to keep bar width stable */}
+        <button
+          type="button"
+          className={`dpa-btn dpa-btn-rotate ${
+            emulationConfig.enabled ? '' : 'dpa-btn-rotate--idle'
+          }`}
+          data-testid="dpa-device-rotate-btn"
+          onClick={handleToggleOrientation}
+          disabled={!emulationConfig.enabled}
+          aria-hidden={!emulationConfig.enabled}
+          title={`画面回転 (${
+            emulationConfig.orientation === 'landscape' ? '横向き' : '縦向き'
+          })`}
+        >
+          <RotateCw className="dpa-icon-xs" />
+        </button>
 
         {/* Device Presets Flyout Menu */}
         {deviceMenuOpen && (
@@ -346,39 +332,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
 
       <div className="dpa-divider" />
 
-      {/* 3. [🔴 REC] Recording Toggle Button */}
-      <button
-        type="button"
-        className={`dpa-btn dpa-btn-rec ${
-          isRecording ? 'dpa-btn-rec--recording' : ''
-        }`}
-        data-testid="dpa-bottom-bar-rec-btn"
-        title={
-          isRecording
-            ? '録画停止 & Studioを開く'
-            : '動的UIタイムライン録画開始 (Studio)'
-        }
-        onClick={onToggleRecording}
-      >
-        <span
-          className={`dpa-rec-dot ${
-            isRecording ? 'dpa-rec-dot--active' : ''
-          }`}
-        />
-        <span className="dpa-btn-text">
-          {isRecording
-            ? `${Math.floor(recordingDurationMs / 60000)
-                .toString()
-                .padStart(2, '0')}:${Math.floor((recordingDurationMs % 60000) / 1000)
-                .toString()
-                .padStart(2, '0')}`
-            : 'REC'}
-        </span>
-      </button>
-
-      <div className="dpa-divider" />
-
-      {/* 4. [📝 指示数バッジ (例: 2件 ▲)] Drawer Toggle */}
+      {/* 3. [📝 指示数バッジ (例: 2件 ▲)] Drawer Toggle */}
       <button
         type="button"
         className={`dpa-btn dpa-btn-drawer ${

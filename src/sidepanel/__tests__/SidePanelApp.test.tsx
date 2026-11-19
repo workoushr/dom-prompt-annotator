@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SidePanelApp } from '../SidePanelApp';
 import {
   getPageState,
+  getStorageKey,
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
@@ -55,11 +56,18 @@ describe('SidePanelApp UI (src/sidepanel/SidePanelApp.tsx)', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
   let tabSendMessageMock: ReturnType<typeof vi.fn>;
+  let storageChangedListener:
+    | ((
+        changes: { [key: string]: chrome.storage.StorageChange },
+        areaName: string
+      ) => void)
+    | null = null;
   const activeTabUrl = 'https://example.com/dashboard';
 
   beforeEach(async () => {
     resetMemoryStoreForTests();
     document.body.innerHTML = '';
+    storageChangedListener = null;
 
     tabSendMessageMock = vi.fn().mockImplementation(async (_tabId, msg) => {
       if (msg?.type === 'GET_LIVE_PAGE_CONTEXT') {
@@ -100,7 +108,16 @@ describe('SidePanelApp UI (src/sidepanel/SidePanelApp.tsx)', () => {
       },
       storage: {
         onChanged: {
-          addListener: vi.fn(),
+          addListener: vi.fn(
+            (
+              cb: (
+                changes: { [key: string]: chrome.storage.StorageChange },
+                areaName: string
+              ) => void
+            ) => {
+              storageChangedListener = cb;
+            }
+          ),
           removeListener: vi.fn(),
         },
       },
@@ -382,5 +399,92 @@ describe('SidePanelApp UI (src/sidepanel/SidePanelApp.tsx)', () => {
 
     expect(writeTextMock).toHaveBeenCalledTimes(1);
     expect(copyBtn.textContent).toContain('コピーしました！');
+
+    // A successful copy clears markings in state and notifies the content script.
+    const stateAfterCopy = await getPageState(activeTabUrl);
+    expect(stateAfterCopy.annotations).toEqual([]);
+    expect(stateAfterCopy.globalInstruction).toBe(
+      'Tailwind CSSを使用してください'
+    );
+    expect(tabSendMessageMock).toHaveBeenCalledWith(101, {
+      type: 'CLEAR_ANNOTATIONS',
+      url: activeTabUrl,
+    });
+    expect(
+      container.querySelector('[data-testid="annotation-count-badge"]')
+        ?.textContent
+    ).toBe('0 件の指示');
+  });
+
+  it('does not clear annotations or show success when the clipboard write fails', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error('Clipboard denied')),
+      },
+      configurable: true,
+    });
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn().mockReturnValue(false),
+      configurable: true,
+    });
+
+    await savePageState(activeTabUrl, {
+      annotations: [createMockAnnotation(1)],
+    });
+
+    await renderSidePanel();
+
+    const copyBtn = container.querySelector(
+      '[data-testid="copy-export-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      copyBtn.click();
+    });
+
+    const stateAfterFailedCopy = await getPageState(activeTabUrl);
+    expect(stateAfterFailedCopy.annotations).toHaveLength(1);
+    expect(copyBtn.textContent).not.toContain('コピーしました');
+    expect(tabSendMessageMock).not.toHaveBeenCalledWith(101, {
+      type: 'CLEAR_ANNOTATIONS',
+      url: activeTabUrl,
+    });
+    expect(
+      container.querySelector('[data-testid="annotation-count-badge"]')
+        ?.textContent
+    ).toBe('1 件の指示');
+  });
+
+  it('reacts to session storage changes but ignores local area changes', async () => {
+    await renderSidePanel();
+    expect(storageChangedListener).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="annotation-count-badge"]')
+        ?.textContent
+    ).toBe('0 件の指示');
+
+    const storageKey = getStorageKey(activeTabUrl);
+    await savePageState(activeTabUrl, {
+      annotations: [createMockAnnotation(1)],
+    });
+
+    await act(async () => {
+      storageChangedListener?.({ [storageKey]: {} }, 'local');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector('[data-testid="annotation-count-badge"]')
+        ?.textContent
+    ).toBe('0 件の指示');
+
+    await act(async () => {
+      storageChangedListener?.({ [storageKey]: {} }, 'session');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector('[data-testid="annotation-count-badge"]')
+        ?.textContent
+    ).toBe('1 件の指示');
   });
 });

@@ -16,7 +16,7 @@ async function runBuild() {
     fs.rmSync(distDir, { recursive: true, force: true });
   }
 
-  console.log('1/4 Building Side Panel & Studio UI...');
+  console.log('1/4 Building Side Panel UI...');
   await build({
     configFile: false,
     root: resolve(rootDir, 'src'),
@@ -37,7 +37,6 @@ async function runBuild() {
       rollupOptions: {
         input: {
           sidepanel: resolve(rootDir, 'src/sidepanel/index.html'),
-          studio: resolve(rootDir, 'src/studio/index.html'),
         },
       },
     },

@@ -10,10 +10,12 @@ import {
 } from '../index';
 import {
   getPageState,
+  getStorageKey,
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
 import { SHADOW_HOST_ID } from '../../utils/masker';
+import { AnnotationItem } from '../../types/annotation';
 
 // Enable React 18 act environment
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -21,9 +23,25 @@ import { SHADOW_HOST_ID } from '../../utils/masker';
 describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
+  let storageChangeListener:
+    | ((changes: { [key: string]: unknown }, areaName: string) => void)
+    | null = null;
 
   beforeEach(async () => {
     resetMemoryStoreForTests();
+    delete (globalThis as Record<string, unknown>).chrome;
+    storageChangeListener = null;
+    (globalThis as Record<string, unknown>).chrome = {
+      runtime: { sendMessage: vi.fn() },
+      storage: {
+        onChanged: {
+          addListener: vi.fn((cb) => {
+            storageChangeListener = cb;
+          }),
+          removeListener: vi.fn(),
+        },
+      },
+    };
     document.body.innerHTML = '';
     document.body.style.paddingBottom = '';
     document.head.innerHTML = '';
@@ -49,6 +67,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       unmountOverlayShadowDom(document);
     });
     document.body.innerHTML = '';
+    delete (document as unknown as Record<string, unknown>).execCommand;
     vi.restoreAllMocks();
   });
 
@@ -57,17 +76,63 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     await act(async () => {
       root!.render(<OverlayApp />);
     });
-    // Flush async getPageState effect
+    // Flush async clear/get effect
     await act(async () => {
+      await Promise.resolve();
       await Promise.resolve();
     });
   }
 
-  it('intercepts clicks on page elements in inspectMode and opens the In-Page Annotation Popover', async () => {
-    await savePageState(window.location.href, {
-      inspectMode: true,
+  /**
+   * Persists a patch and pushes it into the already-mounted overlay through a
+   * session storage change, mirroring how the side panel updates the page.
+   */
+  async function seedMountedState(
+    patch: Parameters<typeof savePageState>[1]
+  ): Promise<void> {
+    await savePageState(window.location.href, patch);
+    await act(async () => {
+      storageChangeListener?.(
+        { [getStorageKey(window.location.href)]: { newValue: true } },
+        'session'
+      );
+      await Promise.resolve();
+      await Promise.resolve();
     });
+  }
 
+  function buildAnnotation(
+    id: number,
+    selector: string,
+    xpath: string
+  ): AnnotationItem {
+    return {
+      id,
+      instruction: `Instruction ${id}`,
+      maskText: false,
+      createdAt: new Date().toISOString(),
+      element: {
+        tagName: 'section',
+        id: selector.replace('#', ''),
+        className: '',
+        selector,
+        xpath,
+        textContent: 'Target',
+        outerHTMLSnippet: `<section id="${selector.replace('#', '')}">Target</section>`,
+        attributes: {},
+        rect: { x: 10, y: 20, width: 100, height: 30 },
+        computedStyles: {},
+        framework: {
+          detected: null,
+          componentName: null,
+          componentHierarchy: [],
+          source: null,
+        },
+      },
+    };
+  }
+
+  it('intercepts clicks on page elements in inspectMode and opens the In-Page Annotation Popover', async () => {
     const pageSection = document.createElement('section');
     pageSection.id = 'hero-section';
     pageSection.innerHTML = `
@@ -78,6 +143,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(pageSection);
 
     await renderOverlay();
+    await seedMountedState({ inspectMode: true });
 
     const ctaLink = document.getElementById('cta-link') as HTMLAnchorElement;
     let defaultPrevented = false;
@@ -116,10 +182,6 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   });
 
   it('supports stepping up to Parent (↑ 親要素) and stepping down to Child (↓ 子要素) via buttons and Alt+Arrow keys', async () => {
-    await savePageState(window.location.href, {
-      inspectMode: true,
-    });
-
     const card = document.createElement('div');
     card.id = 'pricing-card';
     card.className = 'card shadow';
@@ -131,6 +193,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(card);
 
     await renderOverlay();
+    await seedMountedState({ inspectMode: true });
 
     const buyBtn = document.getElementById('buy-btn')!;
 
@@ -196,10 +259,6 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   });
 
   it('toggles maskText, submits an instruction, renders numbered badge (#1), and saves annotation to storage', async () => {
-    await savePageState(window.location.href, {
-      inspectMode: true,
-    });
-
     const profileHeader = document.createElement('h2');
     profileHeader.id = 'user-greeting';
     profileHeader.className = 'title-lg';
@@ -207,6 +266,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(profileHeader);
 
     await renderOverlay();
+    await seedMountedState({ inspectMode: true });
 
     // Click element to open Popover
     await act(async () => {
@@ -297,7 +357,8 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
 
     const publicEl = document.getElementById('public-label')!;
 
-    await savePageState(window.location.href, {
+    await renderOverlay();
+    await seedMountedState({
       inspectMode: true,
       maskingConfig: {
         visualMaskEnabled: true,
@@ -340,7 +401,6 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       ],
     });
 
-    await renderOverlay();
     expect(publicEl).not.toBeNull();
 
     const maskBoxes = container.querySelectorAll(
@@ -388,11 +448,6 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   });
 
   it('closes overlay UI completely via close button on bottom bar', async () => {
-    await savePageState(window.location.href, {
-      inspectMode: true,
-      isVisible: true,
-    });
-
     await renderOverlay();
 
     const bottomBar = container.querySelector('[data-testid="dpa-bottom-bar"]');
@@ -419,12 +474,8 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   });
 
   it('closes overlay UI via Escape key (two Esc presses when inspectMode is active)', async () => {
-    await savePageState(window.location.href, {
-      inspectMode: true,
-      isVisible: true,
-    });
-
     await renderOverlay();
+    await seedMountedState({ inspectMode: true });
 
     expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
 
@@ -467,13 +518,16 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       },
     };
 
-    // Start with closed UI
-    await savePageState(window.location.href, {
-      inspectMode: false,
-      isVisible: false,
-    });
-
+    // Start with the UI open, then close it so reopening paths are exercised.
     await renderOverlay();
+
+    const initialCloseBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-close-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      initialCloseBtn.click();
+      await Promise.resolve();
+    });
 
     // Initially closed
     expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).toBeNull();
@@ -630,30 +684,11 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     });
   });
 
-  describe('Device Emulation Feedback & Error Handling (Issue 6)', () => {
-    it('shows success toast when device emulation succeeds via runtime message', async () => {
-      (globalThis as any).chrome = {
-        runtime: {
-          sendMessage: vi.fn((msg: any) => {
-            if (msg.type === 'SET_DEVICE_EMULATION') {
-              return Promise.resolve({
-                ok: true,
-                config: {
-                  enabled: true,
-                  presetId: 'iphone-se',
-                  name: 'iPhone SE',
-                  width: 375,
-                  height: 667,
-                  orientation: 'portrait',
-                  deviceScaleFactor: 2,
-                  mobile: true,
-                  touch: true,
-                },
-              });
-            }
-            return Promise.resolve({ ok: true });
-          }),
-        },
+  describe('Device Emulation (in-page iframe preview)', () => {
+    it('applies a preset, renders the preview iframe, and keeps the bottom bar in place', async () => {
+      const sendMessage = vi.fn();
+      (globalThis as Record<string, unknown>).chrome = {
+        runtime: { sendMessage },
       };
 
       await renderOverlay();
@@ -662,6 +697,12 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
         '[data-testid="dpa-bottom-bar-device-btn"]'
       ) as HTMLButtonElement;
       expect(deviceBtn).not.toBeNull();
+
+      const barBefore = container.querySelector(
+        '[data-testid="dpa-bottom-bar"]'
+      ) as HTMLElement;
+      expect(barBefore).not.toBeNull();
+      const paddingBefore = document.body.style.paddingBottom;
 
       // Open menu
       await act(async () => {
@@ -686,23 +727,40 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
 
       // Verify device button label updated
       expect(deviceBtn.textContent).toContain('iPhone SE (375×667)');
+
+      // Preview backdrop + iframe are rendered at the raw preset size, scaled.
+      const preview = container.querySelector(
+        '[data-testid="dpa-device-preview"]'
+      ) as HTMLElement;
+      expect(preview).not.toBeNull();
+      const iframe = container.querySelector(
+        '[data-testid="dpa-device-preview-iframe"]'
+      ) as HTMLIFrameElement;
+      expect(iframe).not.toBeNull();
+      expect(iframe.getAttribute('width')).toBe('375');
+      expect(iframe.getAttribute('height')).toBe('667');
+      expect(iframe.style.width).toBe('375px');
+      expect(iframe.style.height).toBe('667px');
+      expect(iframe.style.transform).toMatch(/^scale\(/);
+      expect(iframe.getAttribute('src')).toBe(window.location.href);
+
+      // The bar node is the same and the preview does not alter page layout.
+      const barAfter = container.querySelector(
+        '[data-testid="dpa-bottom-bar"]'
+      ) as HTMLElement;
+      expect(barAfter).toBe(barBefore);
+      expect(preview.contains(barAfter)).toBe(false);
+      expect(document.body.style.paddingBottom).toBe(paddingBefore);
+
+      // Device emulation stays local: only the mount state broadcast is allowed.
+      expect(
+        sendMessage.mock.calls.every(
+          ([message]) => message?.type === 'PAGE_STATE_UPDATED'
+        )
+      ).toBe(true);
     });
 
-    it('shows error toast and does not falsely activate emulation when background fails', async () => {
-      (globalThis as any).chrome = {
-        runtime: {
-          sendMessage: vi.fn((msg: any) => {
-            if (msg.type === 'SET_DEVICE_EMULATION') {
-              return Promise.resolve({
-                ok: false,
-                error: '既にDevToolsまたは別のデバッガーが開いているため接続できません。DevToolsを閉じて再試行してください。',
-              });
-            }
-            return Promise.resolve({ ok: true });
-          }),
-        },
-      };
-
+    it('rotates the selected device locally and shows the rotation toast', async () => {
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
@@ -722,33 +780,74 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
         await Promise.resolve();
       });
 
-      // Error toast must be displayed
+      expect(deviceBtn.textContent).toContain('iPhone SE (375×667)');
+
+      const iframe = container.querySelector(
+        '[data-testid="dpa-device-preview-iframe"]'
+      ) as HTMLIFrameElement;
+      expect(iframe).not.toBeNull();
+      const srcBefore = iframe.getAttribute('src');
+
+      const rotateBtn = container.querySelector(
+        '[data-testid="dpa-device-rotate-btn"]'
+      ) as HTMLButtonElement;
+      expect(rotateBtn).not.toBeNull();
+
+      await act(async () => {
+        rotateBtn.click();
+        await Promise.resolve();
+      });
+
       const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
       expect(toast).not.toBeNull();
-      expect(toast?.textContent).toContain('⚠️ デバイスエミュレーション失敗: 既にDevToolsまたは別のデバッガーが開いているため接続できません');
+      expect(toast?.textContent).toContain('🔄 iPhone SE (横向き: 667×375) に回転しました');
+      expect(deviceBtn.textContent).toContain('iPhone SE (667×375)');
 
-      // Device button must remain un-emulated
-      expect(deviceBtn.textContent).toContain('デバイス切替');
-      expect(container.querySelector('[data-testid="dpa-device-active-badge"]')).toBeNull();
+      // Rotation only resizes the existing iframe; it must not reload its src.
+      expect(iframe.getAttribute('width')).toBe('667');
+      expect(iframe.getAttribute('height')).toBe('375');
+      expect(iframe.getAttribute('src')).toBe(srcBefore);
+
+      // Switching presets while landscape must keep the landscape dimensions.
+      await act(async () => {
+        deviceBtn.click();
+      });
+      const ipadPreset = container.querySelector(
+        '[data-testid="dpa-device-preset-ipad-mini"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        ipadPreset.click();
+        await Promise.resolve();
+      });
+      expect(deviceBtn.textContent).toContain('iPad Mini (1024×768)');
+      expect(iframe.getAttribute('width')).toBe('1024');
+      expect(iframe.getAttribute('height')).toBe('768');
     });
 
-    it('shows desktop reset toast when clearing device emulation', async () => {
-      (globalThis as any).chrome = {
-        runtime: {
-          sendMessage: vi.fn((msg: any) => {
-            if (msg.type === 'CLEAR_DEVICE_EMULATION') {
-              return Promise.resolve({ ok: true });
-            }
-            return Promise.resolve({ ok: true });
-          }),
-        },
-      };
-
+    it('shows desktop reset toast and clears local emulation state', async () => {
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
         '[data-testid="dpa-bottom-bar-device-btn"]'
       ) as HTMLButtonElement;
+
+      await act(async () => {
+        deviceBtn.click();
+      });
+
+      const sePresetBtn = container.querySelector(
+        '[data-testid="dpa-device-preset-iphone-se"]'
+      ) as HTMLButtonElement;
+
+      await act(async () => {
+        sePresetBtn.click();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[data-testid="dpa-device-active-badge"]')).not.toBeNull();
+      expect(
+        container.querySelector('[data-testid="dpa-device-preview-iframe"]')
+      ).not.toBeNull();
 
       await act(async () => {
         deviceBtn.click();
@@ -767,6 +866,187 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
       expect(toast).not.toBeNull();
       expect(toast?.textContent).toContain('🖥️ デスクトップ表示にリセットしました');
+      expect(deviceBtn.textContent).toContain('デバイス切替');
+      expect(container.querySelector('[data-testid="dpa-device-active-badge"]')).toBeNull();
+      expect(container.querySelector('[data-testid="dpa-device-preview"]')).toBeNull();
+      expect(
+        container.querySelector('[data-testid="dpa-device-preview-iframe"]')
+      ).toBeNull();
+    });
+
+    it('shows a non-interactive hint when the preview document is inaccessible', async () => {
+      await renderOverlay();
+
+      const deviceBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-device-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        deviceBtn.click();
+      });
+      const sePresetBtn = container.querySelector(
+        '[data-testid="dpa-device-preset-iphone-se"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        sePresetBtn.click();
+        await Promise.resolve();
+      });
+
+      const iframe = container.querySelector(
+        '[data-testid="dpa-device-preview-iframe"]'
+      ) as HTMLIFrameElement;
+      expect(iframe).not.toBeNull();
+
+      // Simulate a cross-origin document: contentDocument access yields null.
+      Object.defineProperty(iframe, 'contentDocument', {
+        configurable: true,
+        get: () => null,
+      });
+
+      await act(async () => {
+        iframe.dispatchEvent(new Event('load'));
+        await Promise.resolve();
+      });
+
+      const hint = container.querySelector(
+        '[data-testid="dpa-device-preview-hint"]'
+      );
+      expect(hint).not.toBeNull();
+      expect(hint?.textContent).toContain('クロスオリジン');
+      expect(iframe.style.pointerEvents).toBe('none');
+      expect(container.querySelector('[data-testid="dpa-device-preview"]')).not.toBeNull();
+    });
+  });
+
+  describe('Prompt copy clears markings only on success', () => {
+    it('clears annotations, closes the popover, and toasts after a successful copy', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      });
+
+      const target = document.createElement('section');
+      target.id = 'copy-target';
+      target.textContent = 'Copy target';
+      document.body.appendChild(target);
+
+      await renderOverlay();
+      await seedMountedState({
+        annotations: [buildAnnotation(1, '#copy-target', '//*[@id="copy-target"]')],
+      });
+
+      const badge = container.querySelector(
+        '[data-testid="dpa-badge-1"]'
+      ) as HTMLButtonElement;
+      expect(badge).not.toBeNull();
+      await act(async () => {
+        badge.click();
+      });
+      expect(container.querySelector('[data-testid="dpa-popover"]')).not.toBeNull();
+
+      const copyBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-copy-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        copyBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('[data-testid="dpa-badge-1"]')).toBeNull();
+      expect(container.querySelector('[data-testid="dpa-popover"]')).toBeNull();
+      const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
+      expect(toast?.textContent).toContain(
+        'コピーしました。マーキングをクリアしました'
+      );
+
+      const stored = await getPageState(window.location.href);
+      expect(stored.annotations).toHaveLength(0);
+    });
+
+    it('keeps annotations when both clipboard paths fail', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: vi.fn().mockRejectedValue(new Error('denied')),
+        },
+        configurable: true,
+      });
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: vi.fn(() => false),
+      });
+
+      const target = document.createElement('section');
+      target.id = 'keep-target';
+      target.textContent = 'Keep target';
+      document.body.appendChild(target);
+
+      await renderOverlay();
+      await seedMountedState({
+        annotations: [buildAnnotation(1, '#keep-target', '//*[@id="keep-target"]')],
+      });
+
+      const copyBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-copy-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        copyBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[data-testid="dpa-badge-1"]')).not.toBeNull();
+      const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
+      expect(toast?.textContent).toContain('コピーに失敗しました');
+      const stored = await getPageState(window.location.href);
+      expect(stored.annotations).toHaveLength(1);
+    });
+
+    it('clears via the execCommand fallback and labels the JSON toast', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+        configurable: true,
+      });
+      const execCommand = vi.fn(() => true);
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: execCommand,
+      });
+
+      const target = document.createElement('section');
+      target.id = 'json-target';
+      target.textContent = 'JSON target';
+      document.body.appendChild(target);
+
+      await renderOverlay();
+      await seedMountedState({
+        annotations: [buildAnnotation(1, '#json-target', '//*[@id="json-target"]')],
+      });
+
+      const formatToggle = container.querySelector(
+        '[data-testid="dpa-copy-format-toggle-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        formatToggle.click();
+      });
+      const jsonBtn = container.querySelector(
+        '[data-testid="dpa-copy-json-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        jsonBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(container.querySelector('[data-testid="dpa-badge-1"]')).toBeNull();
+      const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
+      expect(toast?.textContent).toContain('JSON');
+      expect(toast?.textContent).toContain('マーキングをクリアしました');
     });
   });
 });

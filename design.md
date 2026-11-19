@@ -4,10 +4,7 @@
 
 `dom-prompt-annotator` は、Web開発者・デザイナー・QAが「画面を見ながら直感的にAI（LLM）へのUI修正プロンプトを生成する」ための Chrome 拡張機能（Manifest V3）です。
 
-従来の拡張機能によくある「画面右端を 300px〜400px 占有して対象ページのレイアウトを崩してしまう Side Panel」を排し、**Figma UI3 に完全準拠したフローティングボトムバー（Canvas Bottom Bar）** と、**動的UIを巻き戻して指示できるタイムラインリプレイスタジオ（Studio）** を核とするミニマルなUI/UXを提供します。
-
-> **💡 インタラクティブモックアップ**:
-> Figma UI3 デザイン言語を再現したスタジオUIプロトタイプは [`docs/studio_mockup.html`](./docs/studio_mockup.html) で確認できます。
+対象ページのレイアウトを大きく崩さずに操作できるよう、**Figma UI3 に準拠したフローティングボトムバー（Canvas Bottom Bar）** をページ上に常駐させ、指示の管理・マスキング設定・出力は **Chrome サイドパネル** で行います。ページ状態は **`chrome.storage.session`** にのみ保持するセッション限定の設計とし、ページ更新・再読み込みでマーキング（番号バッジ・指示）は消えます。
 
 ---
 
@@ -17,17 +14,19 @@
 
 ### 2.1 技術スタック
 - **UI Framework**: React 18 + TypeScript
-- **Design System / Component Primitive**: **shadcn/ui** (Radix UI Primitives + Tailwind CSS)
 - **Icons**: Lucide React
-- **Styling**: Tailwind CSS + Shadow DOM 内包スタイルシート
+- **Styling**: Tailwind CSS（サイドパネル） / Shadow DOM 内スコープドCSS（ページ内オーバーレイ）
+- **Component Design**: Figma UI3 のボタン・メニュー・ドロワー・バッジのデザイン言語を踏襲
 
 ### 2.2 デザイン原則 (Design Principles)
 1. **Unobtrusive（画面を邪魔しない）**:
    - 閲覧対象のWebページが主役。拡張機能のUIはコンパクトなボトムバーに収まり、透過・ぼかし（`backdrop-blur`）で背後を遮らない。
+   - デバイスプレビューを開閉してもボトムバーの位置は動かさない。
 2. **Precision & Density（高密度かつ精緻）**:
    - フォントサイズは 12px〜13px、余白は `p-1.5`〜`p-2.5` を基調とした Figma / DevTools ライクな情報密度。
 3. **Portal Containment（Shadow DOM 隔離の徹底）**:
-   - shadcn/ui の Radix コンポーネント（Popover, Tooltip, DropdownMenu など）は必ず Shadow DOM 内部を `container` に指定し、Webサイト側のDOMやCSSと一切干渉させない。
+   - ページ内のポップオーバー・メニュー・ドロワー・トーストは Shadow DOM 内部に描画し、Webサイト側のDOMやCSSと一切干渉させない。
+   - サイドパネルは拡張機能専用オリジンで動作するため、ページ側のCSSの影響を受けない。
 
 ### 2.3 カラーパレット & トークン (Design Tokens)
 
@@ -52,8 +51,7 @@
   /* アクセントカラー (Figma Blue & Status) */
   --accent-blue: #0d99ff;
   --accent-blue-hover: #007be5;
-  --accent-red: #f43f5e;     /* 録画中インジケータ */
-  --accent-amber: #f59e0b;   /* デバイスエミュレート警告 */
+  --accent-amber: #f59e0b;   /* プレビュー制限・注意喚起 */
   --accent-emerald: #10b981; /* コピー完了 */
 
   /* シャドウ */
@@ -66,154 +64,209 @@
 
 ## 3. UI画面構成とレイアウト仕様 (UI Components Architecture)
 
-全体のUIは大きく分けて **2つの体験** で構成されます。
+UIは大きく分けて **ページ上に常駐するライブUI** と **拡張機能のサイドパネル** の2つで構成されます。
 
 ```text
-[体験 A: ライブ画面]
-  ページ上に浮かぶ「Figma風ボトムバー」＋「要素ハイライト」＋「インライン指示ポップオーバー」
+[ページ上]
+  フローティングボトムバー
+  ＋ 要素ハイライト / 番号バッジ
+  ＋ インライン指示ポップオーバー
+  ＋ 指示一覧・設定ドロワー
+  ＋ iframe デバイスプレビュー
 
-[体験 B: スタジオ（タイムラインリプレイ）]
-  一瞬で消えるトーストやローダーを巻き戻してアノテーションする「専用タブ全画面」
+[サイドパネル]
+  指示一覧 / 共通前提 / マスキング設定 / 出力プレビュー / コピー
 ```
+
+拡張機能アイコンをクリックするとサイドパネルが開き、ページ側は **選択モード (Inspect ON)** になります。ボトムバーとサイドパネルは同一のページ状態を参照し、どちらから操作しても即座に同期されます。
 
 ---
 
 ### 3.1 フローティングボトムバー (Floating Bottom Bar)
 
-Webページの画面下部中央に常駐するコンパクトなツールバー（高さ `44px`）。
+Webページの画面下部中央に常駐するコンパクトなツールバー（高さ `44px`）。デバイスプレビューの開閉やページの再読み込み後も位置は固定されます。
 
 ```text
-+-----------------------------------------------------------------------------------------+
-| [🔍 選択 (Alt+S)] | [📱 393×852 (iPhone) ▼] | [🔴 REC] | [📝 3件 ▼] | [📋 コピー] | [ー] |
-+-----------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------+
+| [🔍 選択 (Alt+S)] | [📱 393×852 (iPhone) ▼] | [📝 3件 ▼] | [📋 コピー] | [ー] [×] |
++----------------------------------------------------------------------------------+
 ```
 
-| セクション | コンポーネント (shadcn/ui) | 説明 |
+| セクション | コンポーネント | 説明 |
 | :--- | :--- | :--- |
-| **選択モード切替** | `Toggle` / `Button` | クリックまたは `Alt + S` で要素ホバー＆選択モードをON/OFF。アクティブ時はアクセントブルーで発光。 |
-| **デバイスエミュレート** | `DropdownMenu` + `Button` | クリックでプリセット（iPhone 15 Pro, iPad, Desktop）やカスタムサイズ、画面回転（Portrait/Landscape）を切替。 |
-| **セッション録画 (REC)** | `Button` (録画中は点滅ドット) | 動的UI記録用。クリックすると録画開始、停止すると専用リプレイタブが自動起動。 |
-| **指示カウンター & 一覧** | `Popover` / `Sheet` | 現在の指示件数バッジ（例: `3`）。クリックすると上部にミニマルなドロワーが開き、指示の並び替え・削除・前提指示入力が可能。 |
-| **プロンプトコピー** | `Button` (Primary) | ワンクリックで最適化された Markdown / JSON をクリップボードにコピー。完了時にチェックアイコンへアニメーション。 |
+| **選択モード切替** | `Button` + ステータスドット | クリックまたは `Alt + S` で要素ホバー＆選択モードをON/OFF。アクティブ時はアクセントブルーで発光。 |
+| **デバイスプレビュー** | `DropdownMenu` + `Button` | プリセット（iPhone SE, iPhone 15 Pro, iPad Mini, Desktop, Desktop HD）、縦横回転、デスクトップへのリセットを切替。選択時はページ内 iframe プレビューを表示する。 |
+| **指示カウンター & 一覧** | `Button` / `Popover` | 現在の指示件数バッジ（例: `3`）。クリックすると上部にミニマルなドロワーが開き、指示の並び替え・削除・前提指示入力が可能。 |
+| **プロンプトコピー** | `Button` (Primary) + フォーマットメニュー | ワンクリックで Markdown / JSON をクリップボードにコピー。完了時にチェックアイコンへアニメーション。コピー成功後はページのマーキングを全消去する。 |
 | **最小化 (Collapse)** | `Button` (Ghost) | ページ下部のボタンを邪魔する場合、ワンクリックで右隅の小さなピル型FAB（フローティングアクションボタン）に折りたたむ。 |
+| **閉じる (Close)** | `Button` (Ghost) | ボトムバーとポップオーバーを閉じ、ページを通常表示に戻す。 |
 
 ---
 
 ### 3.2 要素選択 & 指示ポップオーバー (Inspector Popover)
 
-ページ上の要素をクリックした際、その要素の真上にアンカー表示されるポップオーバー。
+ページ上の要素をクリックした際、その要素の近くにアンカー表示されるポップオーバー。ビューポート端では上下左右へ自動的に反転・クランプし、ボトムバーと重ならない位置に配置します。
 
-* **コンポーネント**: `shadcn/ui` の `Popover` + `Textarea` + `Badge`
 * **機能**:
   * 検出された要素情報バッジ（タグ名、ID/Class、React/Vueコンポーネント名）
   * 階層移動ボタン（`↑ 親要素` / `↓ 子要素`）
   * 修正指示テキスト入力エリア（オートフォーカス、`Ctrl/Cmd + Enter` で保存）
   * マスキング個別トグル（「この要素のテキストを伏字化」）
+  * 編集時の削除・キャンセル
 
 ---
 
 ### 3.3 アノテーション一覧 & 設定ドロワー (Inspector Drawer)
 
-ボトムバーの「📝 3件」をクリックした際、ボトムバーの上部にスッと展開されるフライアウトパネル。
+ボトムバーの「📝 3件」をクリックした際、ボトムバーの上部に展開されるフライアウトパネル。
 
-* **コンポーネント**: `shadcn/ui` の `Card` / `ScrollArea` / `Tabs`
 * **タブ構成**:
-  1. **指示一覧 (Annotations)**: 各要素のサムネイル・セレクタ・指示内容のカード一覧（ドラッグでの並び替え、削除、ジャンプ）。
-  2. **共通前提 (Context)**: ページ全体の前提プロンプト入力（例:「Tailwind CSSを使用」「レスポンシブ崩れの修正」）。
-  3. **マスキング (Privacy)**: 自動PII伏字化、特定セレクタの一括マスキングルールの設定。
+  1. **指示一覧 (Annotations)**: 各要素のセレクタ・指示内容・フレームワーク情報のカード一覧（該当要素へのジャンプ、削除、全消去）。
+  2. **共通前提 (Context)**: ページ全体の前提プロンプト入力（例:「Tailwind CSSを使用」「モバイル対応」）。クイック挿入チップを提供。
+  3. **マスキング (Privacy)**: 自動PII伏字化、全文テキストマスク、視覚マスク枠、特定セレクタの一括マスキングルールの設定。
 
 ---
 
-### 3.4 タイムラインリプレイスタジオ (Dedicated Replay Studio Tab)
+### 3.4 サイドパネル (Side Panel)
 
-ボトムバーの「🔴 録画停止」を押した際に開く、全画面スタジオタブ。
+拡張機能アイコンから開く常設の管理画面。ページのビューポートを占有しないため、要素選択を続けながら指示リストと設定を確認できます。
+
+* **選択モード切替**: ページ側の選択モードをON/OFFする。
+* **指示一覧**: 件数バッジ、各指示のセレクタ・フレームワーク・本文・マスク状態、該当要素へのスクロール、削除、全消去。
+* **共通前提**: ページ全体への共通指示を編集する。
+* **マスキング設定**: `autoMaskPII` / `maskAllText` / `visualMaskEnabled` / `maskColor`、Playwright Mask Selectorsの追加・削除。
+* **出力**: Markdown+JSON / 純粋JSONの切り替え、プレビュー、クリップボードへのコピー。
+
+---
+
+### 3.5 iframe デバイスプレビュー (In-page Device Preview)
+
+ボトムバーのデバイスメニューからプリセットを選ぶと、選択した幅・高さ・アスペクト比の **iframe** をページ内に表示します。
 
 ```text
-+------------------------------------------------------------------------------------+
-| [Header] DPA Studio | 00:15.420 | [🔒 全文テキストマスク (maskAllText)] | [AIプロンプト出力] |
-+-----------------------------------------------------------------+------------------+
-|                                                                 |                  |
-|                      プレビュー画面 (iframe)                     |  アノテーション   |
-|            (指定デバイス枠内で当時のDOMを完全再現)                |  リスト          |
-|                                                                 |                  |
-|                 [一時停止中のトースト通知]                       |  #1 トースト通知  |
-|               (クリックして指示入力ポップオーバー)                 |     文言と消去    |
-|                                                                 |     時間の修正    |
-|                                                                 |                  |
-+-----------------------------------------------------------------+                  |
-| [▶ 再生/停止] [⏪ -1s] [00:03.200 / 00:15.400] [⏩ +1s]          |                  |
-| =====|========================================================= |                  |
-| (クリック・Mutation等のイベントマーカーが並ぶシークバー)             |                  |
-+-----------------------------------------------------------------+------------------+
++--------------------------------------------------------------+
+|                                                              |
+|        iframe プレビュー (例: 393 × 852 / iPhone 15 Pro)       |
+|        ─ 同一オリジンなら要素選択＆注釈が可能                  |
+|        ─ X-Frame-Options / frame-ancestors で拒否される場合あり  |
+|                                                              |
++--------------------------------------------------------------+
+| [🔍 選択] [📱 393×852 ▼] [📝 3件] [📋 コピー] [ー] [×]          |  ← 位置固定
++--------------------------------------------------------------+
 ```
 
-* **ヘッダー**:
-  * **全文テキストマスク (`maskAllText`) トグル**: 録画されたDOM内のテキスト（機密情報や顧客データ）を丸ごと `[MASKED]` に一括伏字化するスイッチ。ONにするとReplayer内の表示およびエクスポートされるプロンプト・JSONの双方が完全にマスキングされ、純粋なDOM構造・CSSスタイル・操作ログのみをAIに送信可能。
-* **中央部**: `rrweb-player` によるサンドボックス化されたDOM再構築エリア。一時停止中にホバー・クリックするとライブ画面と全く同じアノテーションUIが動作。
-* **下部シークバー**:
-  * 時間軸バー上に「クリックした瞬間」「DOMが変化した瞬間（トースト出現）」がピン留め（Marker）され、クリックでその瞬間へ一発ジャンプ可能。
-* **右側パネル**:
-  * タイムライン上で登録された指示の一覧と、前後のユーザーアクションログ。
+* **ボトムバーは iframe の外側**に描画し、プレビューの開閉・サイズ変更でも位置を変えない。
+* **同一オリジン**の場合のみ、iframe 内のドキュメントへアクセスして要素選択・注釈・マスキングを適用できる。
+* **クロスオリジン**の場合は表示のみとなり、内部要素の注釈はできない。
+* 対象サイトが `X-Frame-Options` や CSP の `frame-ancestors` で埋め込みを拒否している場合、プレビューは表示できない。その場合もトップレベルページでの通常の注釈操作は継続できる。
+* プレビューはページの状態を変更しない（ページの再読み込みやビューポートの書き換えを行わない）。
 
 ---
 
 ## 4. フロントエンド技術設計 (Implementation Architecture)
 
-### 4.1 Shadow DOM への shadcn/ui (Tailwind) 適用方針
-Content Script 内で Webサイト側のCSSと隔離しつつ shadcn/ui を使うため、以下のパイプラインを構築します：
+### 4.1 Shadow DOM へのオーバーレイ適用
+Content Script 内で Webサイト側のCSSと隔離するため、以下の構成を取ります。
 
-1. **CSS Injection**:
-   - ビルド時に Tailwind CSS を単一の CSS 文字列としてバンドル。
-   - `content/index.tsx` でマウントする Shadow Root 内部に `<style>` タグとして直接注入する。
-2. **Radix UI Portal の Shadow Root バインド**:
-   - `PopoverContent`, `DropdownMenuContent`, `TooltipContent` などの Portal 系コンポーネントに対し、`container={shadowRootRef}` を渡す共通ラッパーを提供。
-   - これにより、ポップオーバーが `<body>` 直下に漏れてスタイル崩れを起こすのを 100% 防止する。
+1. **Shadow Root ホスト**:
+   - `content/index.tsx` が `#dpa-root-host` を作成し、Shadow Root 内に React ルートをマウントする。
+   - ページ側のCSSリセットや `!important` の影響を受けない。
+2. **スコープドCSS**:
+   - `overlayStyles.ts` のCSS文字列を Shadow Root 内の `<style>` として注入する。
+   - ポップオーバー・メニュー・ドロワー・トーストも同一 Shadow Root 内に描画し、`document.body` 直下へ漏らさない。
+3. **Main World ブリッジ**:
+   - `mainWorldBridge.js` を `web_accessible_resources` 経由で注入し、React Fiber / Vue 3 のコンポーネント情報を `postMessage` で Content Script へ渡す。
 
-### 4.2 ディレクトリ構成案
+### 4.2 状態モデルとセッション管理
+
+ページ状態 `PageAnnotationState` は以下を保持します。
+
+- `annotations`: 番号付きの指示（要素メタデータ、セレクタ、XPath、指示文、マスク状態）
+- `globalInstruction`: ページ全体の共通前提
+- `maskingConfig`: PII / 全文マスク / 視覚マスク / カスタムセレクタ / マスク色
+- `inspectMode`: 選択モードのON/OFF
+- `isVisible`: ボトムバーの表示状態
+
+**保存先は `chrome.storage.session` のみ**とし、URLを `origin + pathname` に正規化したキーで管理します。ディスクへは保存しません。
+
+- ページ更新・再読み込み時はコンテンツ側の状態を初期化し、過去の番号バッジ・指示を再描画しない。
+- ブラウザセッションをまたいだ復元も行わない。
+- サイドパネルとページ内オーバーレイは、背景 Service Worker を経由して同じ状態を共有する。
+
+### 4.3 メッセージルーティング
+
+```text
+[サイドパネル] ──(SET_INSPECT_MODE / DELETE_ANNOTATION / UPDATE_*)──▶ [Background]
+                                                                          │
+                                                                          ▼
+[ページ内 OverlayApp] ◀──(GET_PAGE_STATE / HIGHLIGHT_ELEMENT 等)──────────┘
+        │
+        └──(PAGE_STATE_UPDATED)──▶ [Background] ──▶ [サイドパネル]
+```
+
+- Background はアクティブタブを解決し、Content Script が未注入の場合は `chrome.scripting` でフォールバック注入してからメッセージを転送する。
+- 状態変更は必ず保存後に `PAGE_STATE_UPDATED` をブロードキャストし、両UIの表示を一致させる。
+- 制限URL（`chrome://`, `chrome-extension://`, Web Store 等）では操作をスキップする。
+
+### 4.4 コピー成功時のマーキング消去フロー
+
+```text
+1. ユーザーが「プロンプトコピー」を実行
+2. 現在の PageAnnotationState から Markdown+JSON または JSON を生成
+3. navigator.clipboard.writeText() でコピー
+4. 成功時: annotations を空にした状態を chrome.storage.session へ保存
+5. PAGE_STATE_UPDATED をブロードキャスト
+6. ページ上の番号バッジ・ポップオーバーを除去し、指示件数を 0 に更新
+```
+
+マーキングの消去はクリップボードへの書き込みが成功した場合にのみ行います。これにより「コピーできたので、そのページの指示は役目を終えた」という操作と状態を一致させます。
+
+### 4.5 ディレクトリ構成
 
 ```text
 src/
-├── components/ui/              # shadcn/ui コンポーネント群 (Radix + Tailwind)
-│   ├── button.tsx
-│   ├── popover.tsx
-│   ├── dropdown-menu.tsx
-│   ├── toggle.tsx
-│   ├── textarea.tsx
-│   ├── scroll-area.tsx
-│   └── badge.tsx
-├── content/                    # ページ内オーバーレイ & ボトムバー
-│   ├── index.tsx               # Shadow Root ホスト作成
-│   ├── FloatingBottomBar.tsx   # Figma風ボトムバー本体
-│   ├── ElementPopover.tsx      # 要素選択時ポップオーバー
-│   ├── AnnotationDrawer.tsx    # 指示一覧・設定ドロワー
-│   ├── domExtractor.ts         # セレクタ・スタイル・React Fiber抽出
-│   └── mainWorldBridge.ts      # Main World解析
-├── studio/                     # タイムラインリプレイ専用タブ
+├── types/
+│   └── annotation.ts           # 共通型・メッセージ型・デバイスプリセット
+├── utils/
+│   ├── masker.ts               # Playwright風マスキング・PIIサニタイズ
+│   ├── storage.ts              # chrome.storage.session のページ状態管理
+│   └── promptFormatter.ts      # Markdown+JSON / JSON 出力
+├── background/
+│   └── index.ts                # Service Worker（サイドパネル起動・メッセージ中継・注入）
+├── content/
+│   ├── index.tsx               # Shadow Root ホスト作成・Bridge 注入
+│   ├── OverlayApp.tsx          # 選択・ホバー・ポップオーバー・バッジ・プレビュー
+│   ├── FloatingBottomBar.tsx   # Figma UI3 風ボトムバー
+│   ├── AnnotationDrawer.tsx    # 指示一覧・共通前提・マスキングドロワー
+│   ├── overlayStyles.ts        # Shadow DOM 用スコープドCSS
+│   ├── domExtractor.ts         # セレクタ・XPath・スタイル・メタデータ抽出
+│   └── mainWorldBridge.ts      # React Fiber / Vue 3 解析
+├── sidepanel/
 │   ├── index.html
 │   ├── main.tsx
-│   ├── StudioApp.tsx           # スタジオメイン画面
-│   ├── TimelineBar.tsx         # シークバー & イベントピン
-│   └── ReplayViewer.tsx        # rrweb-player ラッパー
-├── background/                 # Service Worker (CDP制御・録画・通信)
-│   ├── index.ts
-│   └── debuggerManager.ts      # chrome.debugger によるViewport制御
-├── utils/                      # 共通ロジック
-│   ├── promptFormatter.ts      # LLM向けMarkdown/JSON出力
-│   ├── masker.ts               # PIIサニタイズ
-│   └── storage.ts              # chrome.storage 永続化
-└── types/
-    └── annotation.ts           # 共通型定義
+│   ├── SidePanelApp.tsx        # 指示管理・マスキング設定・出力
+│   └── styles.css              # Tailwind CSS
+└── __tests__/
+    └── integration.test.tsx    # OverlayApp + SidePanelApp 結合テスト
 ```
+
+### 4.6 マスキングの適用順序
+
+出力生成時は以下の順序でサニタイズします。
+
+1. 要素単位の `maskText` を適用
+2. `maskAllText` が有効なら全テキストを `[MASKED]` に置換
+3. `maskSelectors` に一致する要素（および子孫）のテキスト・機密属性を `[MASKED]` に置換
+4. `autoMaskPII` が有効ならメール・電話・カード・トークン等を種別ごとのプレースホルダへ置換
+
+視覚マスク（`#FF00FF` のストライプ枠＋`MASKED` バッジ）はページ上での確認用であり、出力データ自体は上記のテキスト置換によって保護されます。
 
 ---
 
-## 5. ロードマップ (Milestones)
+## 5. 設計上の制約 (Known Constraints)
 
-- **Phase 1: Figma風ボトムバーへの移行**
-  - shadcn/ui コンポーネント基盤のセットアップ（Shadow DOM 適合）。
-  - Side Panel の主要機能をボトムバー（`FloatingBottomBar.tsx`）＋ドロワーへ集約。
-- **Phase 2: デバイスサイズエミュレーションの統合 (Issue #1)**
-  - `chrome.debugger` API による Viewport 切り替えをボトムバーのドロップダウンに実装。
-- **Phase 3: タイムラインリプレイスタジオの実装 (Issue #2)**
-  - `rrweb` による録画・専用タブスタジオ（`studio/`）の実装。
-  - 一時停止DOMに対するアノテーションと、操作ログ付きプロンプト出力の結合。
+- **セッション限定**: ページ状態は `chrome.storage.session` のみ。ページ更新・再読み込み・ブラウザ終了でマーキングは失われる。
+- **コピーで消去**: コピー成功後は指示を再編集できないため、必要な調整はコピー前に完了させる。
+- **iframe プレビュー**: 同一オリジンのみ注釈可能。`X-Frame-Options` / `frame-ancestors` により表示できないサイトがある。
+- **フレームワーク情報**: React 16〜19 / Vue 3 の開発ビルドを対象とし、本番ビルドではコンポーネント名・ソース位置が取得できない場合がある。
+- **制限URL**: `chrome://` や Web Store など、Content Script を注入できないページでは動作しない。
