@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   generateCssSelector,
   generateXPath,
+  generateShadowHostSelectors,
   findElementBySelectorOrXPath,
   extractComputedStyles,
   extractOuterHTMLSnippet,
   extractElementMetadata,
   getParentCandidate,
   getFirstChildCandidate,
+  resolveEventElement,
 } from '../domExtractor';
 import { DEFAULT_MASKING_CONFIG } from '../../types/annotation';
 
@@ -213,6 +215,149 @@ describe('DOM Metadata Extractor (domExtractor.ts)', () => {
       expect(getFirstChildCandidate(outer)).toBe(inner);
       expect(getFirstChildCandidate(inner)).toBe(btn);
       expect(getFirstChildCandidate(btn)).toBeNull();
+    });
+  });
+
+  describe('Shadow DOM support', () => {
+    function setupShadowFixture() {
+      document.body.innerHTML = '<div id="shadow-host"></div>';
+      const host = document.getElementById('shadow-host')!;
+      const shadowRoot = host.attachShadow({ mode: 'open' });
+      shadowRoot.innerHTML = '<button id="shadow-btn">Shadow Action</button>';
+      const btn = shadowRoot.querySelector('#shadow-btn') as HTMLElement;
+      return { host, shadowRoot, btn };
+    }
+
+    it('resolves the inner element from a composed click event path', () => {
+      const { shadowRoot, btn } = setupShadowFixture();
+
+      let resolved: Element | null = null;
+      const listener = (event: Event) => {
+        resolved = resolveEventElement(event);
+      };
+      // jsdom does not expose the original shadow target to document-level
+      // listeners, so capture the composed path from inside the shadow root.
+      shadowRoot.addEventListener('click', listener);
+      try {
+        btn.dispatchEvent(
+          new MouseEvent('click', { bubbles: true, composed: true })
+        );
+      } finally {
+        shadowRoot.removeEventListener('click', listener);
+      }
+
+      expect(resolved).toBe(btn);
+    });
+
+    it('generates a selector unique within the shadow root and stores the host chain in metadata', () => {
+      const { host, shadowRoot, btn } = setupShadowFixture();
+
+      const selector = generateCssSelector(btn);
+      expect(selector).toBe('#shadow-btn');
+      expect(shadowRoot.querySelectorAll(selector).length).toBe(1);
+      // The same selector cannot cross the shadow boundary from the document.
+      expect(document.querySelectorAll(selector).length).toBe(0);
+
+      expect(generateShadowHostSelectors(btn)).toEqual(['#shadow-host']);
+
+      const meta = extractElementMetadata(btn);
+      expect(meta.selector).toBe('#shadow-btn');
+      expect(meta.shadowHostSelectors).toEqual(['#shadow-host']);
+
+      expect(
+        findElementBySelectorOrXPath(
+          meta.selector,
+          meta.xpath,
+          document,
+          meta.shadowHostSelectors
+        )
+      ).toBe(btn);
+      // Without the host chain the shadow-internal selector is unreachable.
+      expect(
+        findElementBySelectorOrXPath(meta.selector, meta.xpath, document)
+      ).toBeNull();
+
+      expect(getFirstChildCandidate(host)).toBe(btn);
+      expect(getParentCandidate(btn)).toBe(host);
+    });
+
+    it('scopes duplicate-element disambiguation to the shadow root', () => {
+      document.body.innerHTML = '<div id="dup-host"></div>';
+      const host = document.getElementById('dup-host')!;
+      const shadowRoot = host.attachShadow({ mode: 'open' });
+      shadowRoot.innerHTML = `
+        <div class="row"><button class="action">One</button></div>
+        <div class="row"><button class="action">Two</button></div>
+      `;
+      const [first, second] = Array.from(
+        shadowRoot.querySelectorAll('button.action')
+      ) as HTMLElement[];
+
+      const firstSelector = generateCssSelector(first!);
+      const secondSelector = generateCssSelector(second!);
+      expect(shadowRoot.querySelectorAll(firstSelector).length).toBe(1);
+      expect(shadowRoot.querySelector(secondSelector)).toBe(second);
+      expect(secondSelector).toContain(':nth-of-type(2)');
+    });
+
+    it('orders nested host selectors outermost -> innermost and resolves through both roots', () => {
+      document.body.innerHTML = '<div id="outer-host"></div>';
+      const outerHost = document.getElementById('outer-host')!;
+      const outerShadow = outerHost.attachShadow({ mode: 'open' });
+      outerShadow.innerHTML = '<div id="inner-host"></div>';
+      const innerHost = outerShadow.querySelector('#inner-host')!;
+      const innerShadow = innerHost.attachShadow({ mode: 'open' });
+      innerShadow.innerHTML = '<button id="deep-btn">Deep</button>';
+      const deepBtn = innerShadow.querySelector('#deep-btn') as HTMLElement;
+
+      const meta = extractElementMetadata(deepBtn);
+      expect(meta.shadowHostSelectors).toEqual(['#outer-host', '#inner-host']);
+
+      expect(
+        findElementBySelectorOrXPath(
+          meta.selector,
+          meta.xpath,
+          document,
+          meta.shadowHostSelectors
+        )
+      ).toBe(deepBtn);
+    });
+
+    it('ignores events originating from the extension overlay', () => {
+      document.body.innerHTML = `
+        <div id="dpa-root-host"><button id="overlay-btn">Overlay</button></div>
+      `;
+      const overlayBtn = document.getElementById('overlay-btn')!;
+
+      let captured: Event | null = null;
+      const listener = (event: Event) => {
+        captured = event;
+      };
+      document.addEventListener('click', listener);
+      try {
+        overlayBtn.dispatchEvent(
+          new MouseEvent('click', { bubbles: true, composed: true })
+        );
+      } finally {
+        document.removeEventListener('click', listener);
+      }
+
+      expect(captured).toBeTruthy();
+      expect(resolveEventElement(captured!)).toBeNull();
+    });
+
+    it('leaves light-DOM metadata and resolution unchanged', () => {
+      document.body.innerHTML = '<button id="light-btn">Light</button>';
+      const lightBtn = document.getElementById('light-btn')!;
+
+      const meta = extractElementMetadata(lightBtn);
+      expect(meta.shadowHostSelectors).toBeUndefined();
+      expect(meta.selector).toBe('#light-btn');
+      expect(generateShadowHostSelectors(lightBtn)).toEqual([]);
+
+      expect(
+        findElementBySelectorOrXPath(meta.selector, meta.xpath, document)
+      ).toBe(lightBtn);
     });
   });
 

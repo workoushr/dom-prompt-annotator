@@ -46,6 +46,11 @@ export interface ElementMetadata {
   rect: ElementRect;
   computedStyles: Record<string, string>;
   framework: FrameworkMetadata | null;
+  /**
+   * CSS selectors for the shadow hosts wrapping this element, ordered
+   * outermost -> innermost. Omitted for elements in the light DOM.
+   */
+  shadowHostSelectors?: string[];
 }
 
 export interface AnnotationItem {
@@ -194,4 +199,5 @@ export type ExtensionMessage =
   | { type: 'HIGHLIGHT_ELEMENT'; selector: string | null; id?: number | null }
   | { type: 'SCROLL_TO_ELEMENT'; selector: string; id?: number }
   | { type: 'GET_LIVE_PAGE_CONTEXT' }
+  | { type: 'GET_TAB_ID' }
   | { type: 'ENSURE_STATE_ACCESS' };

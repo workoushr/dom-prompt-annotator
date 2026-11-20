@@ -197,4 +197,32 @@ describe('Prompt & JSON Formatter (src/utils/promptFormatter.ts)', () => {
     expect(markdown).not.toContain('alice@example.com');
     expect(markdown).toContain('[MASKED_EMAIL]');
   });
+
+  it('includes shadowHostSelectors in the exported element JSON when present', () => {
+    const baseElement = createSampleAnnotation().element;
+    const state = createSamplePageState({
+      annotations: [
+        createSampleAnnotation({
+          element: {
+            ...baseElement,
+            selector: '#shadow-btn',
+            xpath: '/button',
+            shadowHostSelectors: ['#shadow-host'],
+          },
+        }),
+      ],
+    });
+
+    const payload = buildExportPayload(state, {
+      url: 'https://example.com/shadow',
+      title: 'Shadow Page',
+      viewport: { width: 1280, height: 800 },
+    });
+
+    const parsed = JSON.parse(formatAsJson(payload));
+    expect(parsed.annotations[0].element.shadowHostSelectors).toEqual([
+      '#shadow-host',
+    ]);
+    expect(formatAsMarkdownPrompt(payload)).toContain('"shadowHostSelectors"');
+  });
 });

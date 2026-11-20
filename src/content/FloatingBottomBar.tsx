@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   Check,
   ChevronDown,
@@ -34,6 +34,7 @@ export interface FloatingBottomBarProps {
   onCopyPrompt: (format?: 'markdown' | 'json') => Promise<void> | void;
   isCopied?: boolean;
   onClose?: () => void;
+  onMenuOpenChange?: (open: boolean) => void;
 }
 
 export const isInsideRef = (
@@ -47,6 +48,39 @@ export const isInsideRef = (
   const target = e.target as Node;
   return ref.current.contains(target);
 };
+
+interface MenuEscapeController {
+  isOpen: () => boolean;
+  close: () => void;
+}
+
+let menuEscapeController: MenuEscapeController | null = null;
+let menuEscapeListenerAttached = false;
+
+// Installed at module evaluation, before the overlay's passive Escape handler,
+// so the capture listener always runs first and can swallow the event while a
+// flyout menu is open.
+export const installMenuEscapeListener = (): void => {
+  if (menuEscapeListenerAttached || typeof window === 'undefined') return;
+  menuEscapeListenerAttached = true;
+  window.addEventListener(
+    'keydown',
+    (event: KeyboardEvent) => {
+      const controller = menuEscapeController;
+      if (!controller || !controller.isOpen()) return;
+      if (event.key !== 'Escape' || event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      controller.close();
+    },
+    true
+  );
+};
+
+installMenuEscapeListener();
 
 export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   inspectMode,
@@ -62,11 +96,71 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
   onCopyPrompt,
   isCopied = false,
   onClose,
+  onMenuOpenChange,
 }) => {
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [copyFormatMenuOpen, setCopyFormatMenuOpen] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
   const copyMenuRef = useRef<HTMLDivElement>(null);
+  const deviceMenuElRef = useRef<HTMLDivElement>(null);
+  const copyMenuElRef = useRef<HTMLDivElement>(null);
+  const anyMenuOpen = deviceMenuOpen || copyFormatMenuOpen;
+  const anyMenuOpenRef = useRef(false);
+  anyMenuOpenRef.current = anyMenuOpen;
+  const prevMenuOpenRef = useRef(false);
+
+  // Notify consumers whenever either flyout menu opens or closes.
+  useEffect(() => {
+    if (prevMenuOpenRef.current === anyMenuOpen) return;
+    prevMenuOpenRef.current = anyMenuOpen;
+    onMenuOpenChange?.(anyMenuOpen);
+  }, [anyMenuOpen, onMenuOpenChange]);
+
+  // Install the module-level capture listener (idempotent) and expose the
+  // current menu state to it. The first Escape closes only the menu.
+  useLayoutEffect(() => {
+    const controller: MenuEscapeController = {
+      isOpen: () => anyMenuOpenRef.current,
+      close: () => {
+        setDeviceMenuOpen(false);
+        setCopyFormatMenuOpen(false);
+      },
+    };
+    menuEscapeController = controller;
+    installMenuEscapeListener();
+    return () => {
+      if (menuEscapeController === controller) {
+        menuEscapeController = null;
+      }
+    };
+  }, []);
+
+  // Keep flyout menus inside the viewport when the bar is near an edge.
+  useLayoutEffect(() => {
+    const clampMenu = (menu: HTMLElement | null, anchor: 'left' | 'right') => {
+      if (!menu) return;
+      menu.style.left = '';
+      menu.style.right = '';
+      const rect = menu.getBoundingClientRect();
+      if (!rect.width) return;
+      const margin = 8;
+      let shift = 0;
+      if (rect.left < margin) {
+        shift = margin - rect.left;
+      } else if (rect.right > window.innerWidth - margin) {
+        shift = window.innerWidth - margin - rect.right;
+      }
+      if (shift === 0) return;
+      if (anchor === 'left') {
+        menu.style.left = `${shift}px`;
+      } else {
+        menu.style.right = `${-shift}px`;
+      }
+    };
+
+    if (deviceMenuOpen) clampMenu(deviceMenuElRef.current, 'left');
+    if (copyFormatMenuOpen) clampMenu(copyMenuElRef.current, 'right');
+  }, [deviceMenuOpen, copyFormatMenuOpen]);
 
   // Close menus on outside click within shadow DOM
   useEffect(() => {
@@ -270,7 +364,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
 
         {/* Device Presets Flyout Menu */}
         {deviceMenuOpen && (
-          <div className="dpa-device-menu" data-testid="dpa-device-menu">
+          <div className="dpa-device-menu" data-testid="dpa-device-menu" ref={deviceMenuElRef}>
             <div className="dpa-menu-header">デバイスサイズ</div>
             <div className="dpa-menu-items">
               {DEVICE_PRESETS.map((preset) => {
@@ -395,7 +489,7 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
         </button>
 
         {copyFormatMenuOpen && (
-          <div className="dpa-copy-menu" data-testid="dpa-copy-menu">
+          <div className="dpa-copy-menu" data-testid="dpa-copy-menu" ref={copyMenuElRef}>
             <button
               type="button"
               className="dpa-menu-item"

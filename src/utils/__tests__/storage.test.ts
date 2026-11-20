@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   normalizeUrlKey,
   getPageState,
+  getStorageKey,
   savePageState,
   clearPageState,
   resetMemoryStoreForTests,
@@ -63,6 +64,66 @@ describe('storage utility', () => {
       expect(normalizeUrlKey('not a valid url?query=1#hash')).toBe('not a valid url');
       expect(normalizeUrlKey('')).toBe('unknown://empty');
       expect(normalizeUrlKey('   ')).toBe('unknown://empty');
+    });
+  });
+
+  describe('tab-scoped ephemeral state', () => {
+    it('appends the tab scope to the storage key only when provided', () => {
+      const url = 'https://app.example.com/products?page=2';
+      expect(getStorageKey(url)).toBe(
+        `${STORAGE_KEY_PREFIX}https://app.example.com/products`
+      );
+      expect(getStorageKey(url, '42')).toBe(
+        `${STORAGE_KEY_PREFIX}https://app.example.com/products::tab:42`
+      );
+    });
+
+    it('isolates same-URL tabs from each other', async () => {
+      const url = 'https://app.example.com/shared';
+
+      await savePageState(url, { globalInstruction: 'tab one' }, '1');
+      await savePageState(url, { globalInstruction: 'tab two' }, '2');
+
+      expect((await getPageState(url, '1')).globalInstruction).toBe('tab one');
+      expect((await getPageState(url, '2')).globalInstruction).toBe('tab two');
+      // No scope keeps the legacy site-wide key untouched.
+      expect((await getPageState(url)).globalInstruction).toBe('');
+
+      await clearPageState(url, '1');
+      expect((await getPageState(url, '1')).globalInstruction).toBe('');
+      expect((await getPageState(url, '2')).globalInstruction).toBe('tab two');
+    });
+
+    it('isolates scoped keys when falling back to chrome.storage.session', async () => {
+      const backingObject: Record<string, unknown> = {};
+      vi.stubGlobal('chrome', {
+        storage: {
+          session: {
+            get: vi.fn(async (key: string) => ({
+              [key]: backingObject[key],
+            })),
+            set: vi.fn(async (items: Record<string, unknown>) => {
+              Object.assign(backingObject, items);
+            }),
+            remove: vi.fn(async (key: string) => {
+              delete backingObject[key];
+            }),
+          },
+        },
+      });
+
+      const url = 'https://chrome-test.example.com/scoped';
+      await savePageState(url, { globalInstruction: 'tab A' }, 'A');
+      await savePageState(url, { globalInstruction: 'tab B' }, 'B');
+
+      expect(backingObject).toHaveProperty(
+        `${STORAGE_KEY_PREFIX}https://chrome-test.example.com/scoped::tab:A`
+      );
+      expect(backingObject).toHaveProperty(
+        `${STORAGE_KEY_PREFIX}https://chrome-test.example.com/scoped::tab:B`
+      );
+      expect((await getPageState(url, 'A')).globalInstruction).toBe('tab A');
+      expect((await getPageState(url, 'B')).globalInstruction).toBe('tab B');
     });
   });
 

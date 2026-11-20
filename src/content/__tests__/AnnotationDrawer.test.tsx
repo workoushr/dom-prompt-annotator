@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AnnotationDrawer } from '../AnnotationDrawer';
+import { OVERLAY_CSS } from '../overlayStyles';
 import {
   AnnotationItem,
   DEFAULT_MASKING_CONFIG,
@@ -98,6 +99,30 @@ describe('AnnotationDrawer Component (Figma UI3 Style)', () => {
 
     return defaultProps;
   };
+
+  it('wraps long unbroken instruction text without horizontal overflow (Issue #32)', async () => {
+    const longInstruction = `1行目\n\n${'A'.repeat(600)}`;
+    await renderComponent({
+      annotations: [
+        {
+          ...sampleAnnotations[0],
+          instruction: longInstruction,
+        },
+      ],
+    });
+
+    const instructionEl = container.querySelector('.dpa-annotation-instruction') as HTMLElement;
+    expect(instructionEl).not.toBeNull();
+    expect(instructionEl.textContent).toBe(longInstruction);
+    expect(instructionEl.textContent).toContain('\n\n');
+
+    // Style contract: preserved newlines and forced wrapping at any character.
+    const block = OVERLAY_CSS.match(/\.dpa-annotation-instruction\s*\{[^}]*\}/s)?.[0] || '';
+    expect(block).toContain('white-space: pre-wrap');
+    expect(block).toContain('overflow-wrap: anywhere');
+    expect(block).toContain('word-break: break-word');
+    expect(block).toContain('min-width: 0');
+  });
 
   it('renders null when isOpen is false', async () => {
     await renderComponent({ isOpen: false });
@@ -223,6 +248,18 @@ describe('AnnotationDrawer Component (Figma UI3 Style)', () => {
       maskAllCheckbox.click();
     });
     expect(onUpdateMaskingConfig).toHaveBeenCalledWith({ maskAllText: true });
+
+    // Pick a custom mask color (Issue #32)
+    const colorInput = container.querySelector(
+      '[data-testid="dpa-drawer-mask-color"]'
+    ) as HTMLInputElement;
+    expect(colorInput).not.toBeNull();
+    expect(colorInput.type).toBe('color');
+    expect(colorInput.value).toBe('#ff00ff');
+    await act(async () => {
+      setElementValue(colorInput, '#00ff88');
+    });
+    expect(onUpdateMaskingConfig).toHaveBeenCalledWith({ maskColor: '#00ff88' });
 
     // Add new mask selector
     const selectorInput = container.querySelector('[data-testid="dpa-drawer-add-selector-input"]') as HTMLInputElement;

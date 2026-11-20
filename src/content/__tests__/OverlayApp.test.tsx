@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { OverlayApp, computePopoverPosition } from '../OverlayApp';
+import { OverlayApp, computePopoverPosition, clipRectToBounds } from '../OverlayApp';
 import {
   BRIDGE_SCRIPT_ID,
   injectMainWorldBridgeScript,
@@ -10,7 +10,6 @@ import {
 } from '../index';
 import {
   getPageState,
-  getStorageKey,
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
@@ -28,21 +27,25 @@ import { AnnotationItem } from '../../types/annotation';
 describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
-  let storageChangeListener:
-    | ((changes: { [key: string]: unknown }, areaName: string) => void)
+  let messageListener:
+    | ((
+        msg: unknown,
+        sender: unknown,
+        sendResponse: (response?: unknown) => void
+      ) => unknown)
     | null = null;
 
   beforeEach(async () => {
     resetMemoryStoreForTests();
     resetUiPreferencesForTests();
     delete (globalThis as Record<string, unknown>).chrome;
-    storageChangeListener = null;
+    messageListener = null;
     (globalThis as Record<string, unknown>).chrome = {
-      runtime: { sendMessage: vi.fn() },
-      storage: {
-        onChanged: {
+      runtime: {
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        onMessage: {
           addListener: vi.fn((cb) => {
-            storageChangeListener = cb;
+            messageListener = cb;
           }),
           removeListener: vi.fn(),
         },
@@ -74,33 +77,55 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     });
     document.body.innerHTML = '';
     delete (document as unknown as Record<string, unknown>).execCommand;
+    window.history.replaceState({}, '', '/');
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  async function flushAsync(times = 8) {
+    await act(async () => {
+      for (let i = 0; i < times; i += 1) {
+        await Promise.resolve();
+      }
+    });
+  }
 
   async function renderOverlay() {
     root = createRoot(container);
     await act(async () => {
       root!.render(<OverlayApp />);
     });
-    // Flush async clear/get effect
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    // Flush async clear/get/save effect
+    await flushAsync();
+  }
+
+  async function renderOverlayWithTab(tabId: number) {
+    const chromeMock = (globalThis as Record<string, unknown>).chrome as {
+      runtime: {
+        sendMessage: (
+          message: { type?: string }
+        ) => Promise<{ tabId: number } | undefined>;
+      };
+    };
+    chromeMock.runtime.sendMessage = vi.fn(async (message: { type?: string }) =>
+      message?.type === 'GET_TAB_ID' ? { tabId } : undefined
+    );
+    await renderOverlay();
   }
 
   /**
    * Persists a patch and pushes it into the already-mounted overlay through a
-   * session storage change, mirroring how the side panel updates the page.
+   * runtime broadcast, mirroring how the side panel updates the page.
    */
   async function seedMountedState(
     patch: Parameters<typeof savePageState>[1]
   ): Promise<void> {
-    await savePageState(window.location.href, patch);
+    const nextState = await savePageState(window.location.href, patch);
     await act(async () => {
-      storageChangeListener?.(
-        { [getStorageKey(window.location.href)]: { newValue: true } },
-        'session'
+      messageListener?.(
+        { type: 'PAGE_STATE_UPDATED', state: nextState },
+        {},
+        vi.fn()
       );
       await Promise.resolve();
       await Promise.resolve();
@@ -849,9 +874,16 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       expect(preview.contains(barAfter)).toBe(false);
       expect(document.body.style.paddingBottom).toBe(paddingBefore);
 
-      // Device emulation stays local: only the mount state broadcast is allowed.
+      // Device emulation stays local: only the mount/tab-id messages are allowed.
       expect(
         sendMessage.mock.calls.every(
+          ([message]) =>
+            message?.type === 'PAGE_STATE_UPDATED' ||
+            message?.type === 'GET_TAB_ID'
+        )
+      ).toBe(true);
+      expect(
+        sendMessage.mock.calls.some(
           ([message]) => message?.type === 'PAGE_STATE_UPDATED'
         )
       ).toBe(true);
@@ -1318,6 +1350,290 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       const copiedText = String(writeText.mock.calls[0]?.[0] ?? '');
       expect(copiedText).toContain('- **Text**: `[MASKED]`');
       expectNoSecrets(copiedText);
+    });
+  });
+
+  describe('Tab-scoped ephemeral state and lifecycle', () => {
+    it('keeps state keyed to the mount URL when history.pushState changes the SPA route', async () => {
+      const originalUrl = window.location.href;
+      await renderOverlayWithTab(7);
+
+      window.history.pushState({}, '', '/spa-route');
+      expect(window.location.href).not.toBe(originalUrl);
+
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 's',
+            code: 'KeyS',
+            altKey: true,
+            bubbles: true,
+          })
+        );
+      });
+      await flushAsync(12);
+
+      const originalScoped = await getPageState(originalUrl, '7');
+      expect(originalScoped.isVisible).toBe(true);
+      expect(originalScoped.inspectMode).toBe(true);
+
+      const spaScoped = await getPageState(window.location.href, '7');
+      expect(spaScoped.isVisible).toBe(false);
+      expect((await getPageState(originalUrl)).isVisible).toBe(false);
+    });
+
+    it('isolates same-URL tabs by tab scope', async () => {
+      await saveInspectMode(true);
+      await renderOverlayWithTab(101);
+
+      const url = window.location.href;
+      expect((await getPageState(url, '101')).isVisible).toBe(true);
+      expect((await getPageState(url, '102')).isVisible).toBe(false);
+      expect((await getPageState(url)).isVisible).toBe(false);
+    });
+
+    it('restores the bar from the inspect preference on a persisted pageshow', async () => {
+      await saveInspectMode(true);
+      await renderOverlayWithTab(11);
+
+      const closeBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-close-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        closeBtn.click();
+      });
+      await flushAsync(12);
+      expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).toBeNull();
+
+      // Simulate the preference as it was when the page entered the bfcache.
+      await saveInspectMode(true);
+
+      const pageShow = new Event('pageshow');
+      Object.defineProperty(pageShow, 'persisted', { value: true });
+      await act(async () => {
+        window.dispatchEvent(pageShow);
+      });
+      await flushAsync(12);
+
+      expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+      expect(
+        container.querySelector('[data-testid="dpa-mode-pill"]')?.textContent
+      ).toContain('選択中');
+
+      const state = await getPageState(window.location.href, '11');
+      expect(state.isVisible).toBe(true);
+      expect(state.inspectMode).toBe(true);
+    });
+
+    it('ends at ON after two synchronous inspect toggles', async () => {
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      const selectBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-select-btn"]'
+      ) as HTMLButtonElement;
+
+      await act(async () => {
+        selectBtn.click();
+        selectBtn.click();
+      });
+      await flushAsync(16);
+
+      expect((await loadUiPreferences()).inspectMode).toBe(true);
+      expect((await getPageState(window.location.href)).inspectMode).toBe(true);
+      expect(
+        container.querySelector('[data-testid="dpa-mode-pill"]')?.textContent
+      ).toContain('選択中');
+    });
+  });
+
+  describe('Issue 33 preview/lifecycle polish', () => {
+    it('expands the minimized bar on Alt+S', async () => {
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      const minimizeBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-minimize-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        minimizeBtn.click();
+      });
+      await flushAsync();
+      expect(
+        container.querySelector('[data-testid="dpa-minimized-pill"]')
+      ).not.toBeNull();
+
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 's',
+            code: 'KeyS',
+            altKey: true,
+            bubbles: true,
+          })
+        );
+      });
+      await flushAsync(12);
+
+      expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+      expect(
+        container.querySelector('[data-testid="dpa-minimized-pill"]')
+      ).toBeNull();
+    });
+
+    it('shows an error icon instead of a success icon when copying fails', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: vi.fn().mockRejectedValue(new Error('denied')),
+        },
+        configurable: true,
+      });
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: vi.fn(() => false),
+      });
+
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      const copyBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-copy-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        copyBtn.click();
+      });
+      await flushAsync(12);
+
+      const toast = container.querySelector('[data-testid="dpa-toast-alert"]');
+      expect(toast).not.toBeNull();
+      expect(toast?.querySelector('.dpa-icon-check')).toBeNull();
+      expect(toast?.querySelector('.dpa-icon-warning')).not.toBeNull();
+    });
+
+    it('restarts the copy-success reset timer on repeated copies', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: vi.fn().mockResolvedValue(undefined) },
+        configurable: true,
+      });
+
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      const copyBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-copy-btn"]'
+      ) as HTMLButtonElement;
+
+      vi.useFakeTimers();
+      await act(async () => {
+        copyBtn.click();
+      });
+      await flushAsync(12);
+      expect(copyBtn.textContent).toContain('コピー完了');
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(copyBtn.textContent).toContain('コピー完了');
+
+      // Second copy restarts the full 2.5s success window.
+      await act(async () => {
+        copyBtn.click();
+      });
+      await flushAsync(12);
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(copyBtn.textContent).toContain('コピー完了');
+
+      await act(async () => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(copyBtn.textContent).toContain('プロンプトコピー');
+    });
+
+    it('hides annotations whose live element no longer exists instead of ghosting', async () => {
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      await seedMountedState({
+        inspectMode: true,
+        isVisible: true,
+        annotations: [
+          buildAnnotation(1, '#removed-element', '//*[@id="removed-element"]'),
+        ],
+      });
+
+      expect(container.querySelector('[data-testid="dpa-badge-1"]')).toBeNull();
+      expect(
+        container.querySelector('[data-testid="dpa-annotation-outline-1"]')
+      ).toBeNull();
+    });
+
+    it('clips preview overlays to the iframe rect and hides fully offscreen targets', () => {
+      const previewBounds = { left: 100, top: 80, width: 375, height: 667 };
+
+      expect(
+        clipRectToBounds(
+          { x: 0, y: 0, width: 40, height: 40 },
+          previewBounds
+        )
+      ).toBeNull();
+      expect(
+        clipRectToBounds(
+          { x: 120, y: 100, width: 40, height: 40 },
+          previewBounds
+        )
+      ).toEqual({ x: 120, y: 100, width: 40, height: 40 });
+      expect(
+        clipRectToBounds(
+          { x: 90, y: 70, width: 40, height: 40 },
+          previewBounds
+        )
+      ).toEqual({ x: 100, y: 80, width: 30, height: 30 });
+    });
+  });
+
+  describe('Shadow DOM annotation resolution', () => {
+    it('resolves an annotation inside an open shadow root using its host chain', async () => {
+      const host = document.createElement('div');
+      host.id = 'shadow-card';
+      document.body.appendChild(host);
+      const shadowRoot = host.attachShadow({ mode: 'open' });
+      const innerButton = document.createElement('button');
+      innerButton.id = 'shadow-action';
+      innerButton.textContent = 'Pay now';
+      shadowRoot.appendChild(innerButton);
+
+      await saveInspectMode(true);
+      await renderOverlay();
+
+      const annotation = buildAnnotation(
+        1,
+        '#shadow-action',
+        '//*[@id="shadow-action"]'
+      );
+      annotation.element.shadowHostSelectors = ['#shadow-card'];
+
+      await seedMountedState({
+        inspectMode: true,
+        isVisible: true,
+        annotations: [annotation],
+      });
+
+      // The selector only resolves inside the shadow root.
+      expect(document.querySelector('#shadow-action')).toBeNull();
+      const badge = container.querySelector(
+        '[data-testid="dpa-badge-1"]'
+      ) as HTMLButtonElement;
+      expect(badge).not.toBeNull();
+
+      await act(async () => {
+        badge.click();
+      });
+      expect(
+        container.querySelector('[data-testid="dpa-popover-selector"]')
+          ?.textContent
+      ).toBe('#shadow-action');
     });
   });
 });

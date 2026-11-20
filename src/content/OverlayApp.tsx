@@ -27,7 +27,6 @@ import {
   clearPageState,
   createDefaultPageState,
   getPageState,
-  getStorageKey,
   normalizeUrlKey,
   savePageState,
 } from '../utils/storage';
@@ -39,6 +38,7 @@ import {
   getFirstChildCandidate,
   getParentCandidate,
   requestFrameworkMetadata,
+  resolveEventElement,
 } from './domExtractor';
 
 interface HoveredElementInfo {
@@ -81,18 +81,73 @@ function computeScreenRect(
   };
 }
 
-function resolveEventElement(event: Event): Element | null {
-  const target = event.target as Node | null;
-  if (!target) {
+/**
+ * Bounds used to clip overlay chrome that belongs to the page/preview. When the
+ * device preview is active, overlays must never spill outside the iframe rect.
+ */
+export function getOverlayClipBounds(preview: PreviewMetrics | null): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  if (preview?.doc) {
+    return {
+      left: preview.rect.left,
+      top: preview.rect.top,
+      width: preview.rect.width,
+      height: preview.rect.height,
+    };
+  }
+  const width =
+    typeof window !== 'undefined' && window.innerWidth > 0
+      ? window.innerWidth
+      : 1024;
+  const height =
+    typeof window !== 'undefined' && window.innerHeight > 0
+      ? window.innerHeight
+      : 768;
+  return { left: 0, top: 0, width, height };
+}
+
+/**
+ * Intersects `rect` with `bounds`; returns null when the rect is entirely
+ * outside (including zero-area intersections) so callers can hide it instead
+ * of clamping a ghost to the viewport corner.
+ */
+export function clipRectToBounds(
+  rect: ElementRect,
+  bounds: { left: number; top: number; width: number; height: number }
+): ElementRect | null {
+  const left = Math.max(rect.x, bounds.left);
+  const top = Math.max(rect.y, bounds.top);
+  const right = Math.min(rect.x + rect.width, bounds.left + bounds.width);
+  const bottom = Math.min(rect.y + rect.height, bounds.top + bounds.height);
+
+  // Zero-area elements (common in jsdom and for empty inline nodes) cannot be
+  // intersected; treat their origin as a point and only hide it when outside.
+  if (rect.width <= 0 || rect.height <= 0) {
+    const insideX = rect.x >= bounds.left && rect.x <= bounds.left + bounds.width;
+    const insideY = rect.y >= bounds.top && rect.y <= bounds.top + bounds.height;
+    return insideX && insideY ? { ...rect } : null;
+  }
+
+  if (right <= left || bottom <= top) {
     return null;
   }
-  if (target.nodeType === 1) {
-    return target as Element;
-  }
-  if (target.nodeType === 3 && target.parentElement) {
-    return target.parentElement;
-  }
-  return null;
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.round(right - left),
+    height: Math.round(bottom - top),
+  };
+}
+
+type ToastKind = 'success' | 'error' | 'info';
+
+interface ToastState {
+  message: string;
+  kind: ToastKind;
 }
 
 /**
@@ -161,7 +216,8 @@ export function reconcileAnnotationsForExport(
     const liveEl = findElementBySelectorOrXPath(
       annotation.element.selector,
       annotation.element.xpath,
-      activeDoc
+      activeDoc,
+      annotation.element.shadowHostSelectors
     );
     if (liveEl && isElementMatchedByMaskSelectors(liveEl, maskSelectors)) {
       return { ...annotation, maskText: true };
@@ -321,24 +377,31 @@ export const OverlayApp: React.FC = () => {
   );
   const [preview, setPreview] = useState<PreviewMetrics | null>(null);
   const [isCopied, setIsCopied] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
+  const copyResetTimeoutRef = useRef<number | null>(null);
 
-  const showToast = useCallback((msg: string, duration = 3000) => {
-    if (toastTimeoutRef.current !== null) {
-      window.clearTimeout(toastTimeoutRef.current);
-    }
-    setToastMessage(msg);
-    toastTimeoutRef.current = window.setTimeout(() => {
-      setToastMessage(null);
-      toastTimeoutRef.current = null;
-    }, duration);
-  }, []);
+  const showToast = useCallback(
+    (message: string, kind: ToastKind = 'info', duration = 3000) => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+      setToast({ message, kind });
+      toastTimeoutRef.current = window.setTimeout(() => {
+        setToast(null);
+        toastTimeoutRef.current = null;
+      }, duration);
+    },
+    []
+  );
 
   useEffect(() => {
     return () => {
       if (toastTimeoutRef.current !== null) {
         window.clearTimeout(toastTimeoutRef.current);
+      }
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
       }
     };
   }, []);
@@ -357,6 +420,20 @@ export const OverlayApp: React.FC = () => {
   const previewRef = useRef<PreviewMetrics | null>(preview);
   previewRef.current = preview;
 
+  // URL and tab scope are frozen at mount. SPA pushState must not re-key the
+  // ephemeral page state, and same-URL tabs must not share it.
+  const stateUrlRef = useRef<string>(
+    typeof window !== 'undefined' ? window.location.href : 'https://localhost/'
+  );
+  const stateScopeRef = useRef<string | undefined>(undefined);
+
+  const [barMenuOpen, setBarMenuOpen] = useState(false);
+  const barMenuOpenRef = useRef(false);
+  barMenuOpenRef.current = barMenuOpen;
+
+  const isMinimizedRef = useRef(isMinimized);
+  isMinimizedRef.current = isMinimized;
+
   const toScreenRect = useCallback(
     (el: Element): ElementRect => computeScreenRect(el, previewRef.current),
     []
@@ -365,45 +442,127 @@ export const OverlayApp: React.FC = () => {
   // Page state is ephemeral: never restore markings after a reload/navigation.
   // The inspect preference is the only disk-persisted UI state, and it decides
   // whether the bar is rendered at all on this page.
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let mounted = true;
-    const url = window.location.href;
-
-    const load = async () => {
-      let prefInspectMode = false;
-      try {
-        const preferences = await loadUiPreferences();
-        prefInspectMode = preferences.inspectMode;
-      } catch {
-        // Defaults to inactive when preferences cannot be read.
-      }
-      try {
-        await clearPageState(url);
-      } catch {
-        // Fall through to defaults even if clearing fails.
-      }
-      const loaded = await getPageState(url);
-      if (mounted) {
-        // Keep session page state aligned with the preference so later
-        // annotation patches do not resurrect the default hidden visibility.
-        const nextState = await savePageState(url, {
-          ...loaded,
-          inspectMode: prefInspectMode,
-          isVisible: prefInspectMode,
-        });
-        if (!mounted) {
-          return;
-        }
-        setState(nextState);
-        safeBroadcastPageState(nextState);
-      }
-    };
-
-    void load();
+    mountedRef.current = true;
     return () => {
-      mounted = false;
+      mountedRef.current = false;
     };
   }, []);
+
+  const initializeScopedState = useCallback(async (tabId: number | null) => {
+    stateScopeRef.current =
+      typeof tabId === 'number' ? String(tabId) : undefined;
+
+    let prefInspectMode = false;
+    try {
+      const preferences = await loadUiPreferences();
+      prefInspectMode = preferences.inspectMode;
+    } catch {
+      // Defaults to inactive when preferences cannot be read.
+    }
+
+    const url = stateUrlRef.current;
+    const scope = stateScopeRef.current;
+    try {
+      await clearPageState(url, scope);
+    } catch {
+      // Fall through to defaults even if clearing fails.
+    }
+
+    const loaded = await getPageState(url, scope);
+    if (!mountedRef.current) {
+      return;
+    }
+    // Keep session page state aligned with the preference so later annotation
+    // patches do not resurrect the default hidden visibility.
+    const nextState = await savePageState(
+      url,
+      {
+        ...loaded,
+        inspectMode: prefInspectMode,
+        isVisible: prefInspectMode,
+      },
+      scope
+    );
+    if (!mountedRef.current) {
+      return;
+    }
+    setState(nextState);
+    safeBroadcastPageState(nextState);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const init = async () => {
+      let tabId: number | null = null;
+      try {
+        if (
+          typeof chrome !== 'undefined' &&
+          chrome.runtime &&
+          typeof chrome.runtime.sendMessage === 'function'
+        ) {
+          const request: ExtensionMessage = { type: 'GET_TAB_ID' };
+          const response = (await chrome.runtime.sendMessage(request)) as
+            | { tabId?: number | null }
+            | undefined;
+          tabId =
+            response && typeof response.tabId === 'number'
+              ? response.tabId
+              : null;
+        }
+      } catch {
+        // Non-extension contexts (tests, pages without runtime) use no scope.
+      }
+      if (cancelled) {
+        return;
+      }
+      await initializeScopedState(tabId);
+    };
+
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [initializeScopedState]);
+
+  // Best-effort cleanup when the document unloads; the tab-scoped key must not
+  // leak markings into the next document in the same tab.
+  useEffect(() => {
+    const handlePageHide = () => {
+      void clearPageState(stateUrlRef.current, stateScopeRef.current);
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, []);
+
+  // Back-forward cache restore: the page state is ephemeral, so drop markings
+  // and re-arm the bar from the persisted inspect preference.
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) {
+        return;
+      }
+      setHoveredInfo(null);
+      setPopover(null);
+      setHighlightTarget({ selector: null, id: null });
+      setIsDrawerOpen(false);
+      setIsMinimized(false);
+      setIsCopied(false);
+      const scope = stateScopeRef.current;
+      void initializeScopedState(
+        scope === undefined ? null : Number(scope)
+      );
+    };
+
+    window.addEventListener('pageshow', handlePageShow as EventListener);
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow as EventListener);
+    };
+  }, [initializeScopedState]);
 
   // Issue 5: Dynamically manage document.body.style.paddingBottom
   // When the bottom bar is open (isVisible && !isMinimized), add padding to prevent
@@ -480,7 +639,11 @@ export const OverlayApp: React.FC = () => {
 
   const updateAndPersistState = useCallback(
     async (patch: Parameters<typeof savePageState>[1]): Promise<PageAnnotationState> => {
-      const updated = await savePageState(window.location.href, patch);
+      const updated = await savePageState(
+        stateUrlRef.current,
+        patch,
+        stateScopeRef.current
+      );
       setState(updated);
       safeBroadcastPageState(updated);
       return updated;
@@ -489,7 +652,16 @@ export const OverlayApp: React.FC = () => {
   );
 
   const handleToggleInspectMode = useCallback(async () => {
+    // Compute from the ref and commit the optimistic state synchronously so a
+    // second click in the same tick sees the new value instead of toggling
+    // twice from the stale render state.
     const nextInspect = !stateRef.current.inspectMode;
+    stateRef.current = {
+      ...stateRef.current,
+      inspectMode: nextInspect,
+      isVisible: true,
+    };
+    setState(stateRef.current);
     if (!nextInspect) {
       setHoveredInfo(null);
       setPopover(null);
@@ -628,7 +800,8 @@ export const OverlayApp: React.FC = () => {
       const resolvedEl = findElementBySelectorOrXPath(
         annotation.element.selector,
         annotation.element.xpath,
-        previewRef.current?.doc ?? document
+        previewRef.current?.doc ?? document,
+        annotation.element.shadowHostSelectors
       );
 
       let metadata = resolvedEl
@@ -779,7 +952,11 @@ export const OverlayApp: React.FC = () => {
       }
 
       if (!copied) {
-        showToast('コピーに失敗しました。マーキングは保持されています', 3000);
+        showToast(
+          'コピーに失敗しました。マーキングは保持されています',
+          'error',
+          3000
+        );
         return;
       }
 
@@ -790,11 +967,16 @@ export const OverlayApp: React.FC = () => {
       showToast(
         format === 'json'
           ? 'JSONをコピーしました。マーキングをクリアしました'
-          : 'コピーしました。マーキングをクリアしました'
+          : 'コピーしました。マーキングをクリアしました',
+        'success'
       );
 
-      window.setTimeout(() => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
         setIsCopied(false);
+        copyResetTimeoutRef.current = null;
       }, 2500);
     },
     [showToast, updateAndPersistState]
@@ -829,7 +1011,8 @@ export const OverlayApp: React.FC = () => {
     const targetEl = findElementBySelectorOrXPath(
       selector,
       matchingAnn?.element.xpath,
-      previewRef.current?.doc ?? document
+      previewRef.current?.doc ?? document,
+      matchingAnn?.element.shadowHostSelectors
     );
     if (targetEl && typeof targetEl.scrollIntoView === 'function') {
       targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -920,6 +1103,8 @@ export const OverlayApp: React.FC = () => {
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       if (previewRef.current?.doc) {
+        // Pointer moved onto the parent backdrop, not the preview document.
+        setHoveredInfo(null);
         return;
       }
       if (isEventFromOverlay(event)) {
@@ -974,6 +1159,12 @@ export const OverlayApp: React.FC = () => {
   // Keyboard shortcuts: Alt+S, Escape, Alt+ArrowUp, Alt+ArrowDown
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A flyout menu owns Escape; let FloatingBottomBar close it instead of
+      // toggling inspect mode or closing the overlay.
+      if (event.key === 'Escape' && barMenuOpenRef.current) {
+        return;
+      }
+
       // Alt + S (or Option + S) toggles inspectMode
       if (
         event.altKey &&
@@ -983,6 +1174,7 @@ export const OverlayApp: React.FC = () => {
       ) {
         event.preventDefault();
         event.stopPropagation();
+        setIsMinimized(false);
         if (!stateRef.current.isVisible) {
           void saveInspectMode(true).then(() =>
             updateAndPersistState({ isVisible: true, inspectMode: true })
@@ -1082,37 +1274,6 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
-  // Sync with chrome.storage.onChanged (session area = ephemeral page state)
-  useEffect(() => {
-    if (
-      typeof chrome === 'undefined' ||
-      !chrome.storage?.onChanged ||
-      typeof chrome.storage.onChanged.addListener !== 'function'
-    ) {
-      return;
-    }
-
-    const handleStorageChanged = (
-      changes: { [key: string]: chrome.storage.StorageChange },
-      areaName: string
-    ) => {
-      if (areaName !== 'session') {
-        return;
-      }
-      const key = getStorageKey(window.location.href);
-      if (changes[key]) {
-        void getPageState(window.location.href).then((freshState) => {
-          setState(freshState);
-        });
-      }
-    };
-
-    chrome.storage.onChanged.addListener(handleStorageChanged);
-    return () => {
-      chrome.storage.onChanged.removeListener(handleStorageChanged);
-    };
-  }, []);
-
   // Listen to chrome.runtime.onMessage
   useEffect(() => {
     if (
@@ -1132,11 +1293,12 @@ export const OverlayApp: React.FC = () => {
         return false;
       }
 
-      const currentUrl = window.location.href;
+      const stateUrl = stateUrlRef.current;
+      const stateScope = stateScopeRef.current;
 
       switch (message.type) {
         case 'GET_PAGE_STATE': {
-          void getPageState(message.url || currentUrl).then((s) => {
+          void getPageState(stateUrl, stateScope).then((s) => {
             setState(s);
             sendResponse(s);
           });
@@ -1146,7 +1308,7 @@ export const OverlayApp: React.FC = () => {
         case 'PAGE_STATE_UPDATED': {
           if (
             message.state &&
-            message.state.urlKey === normalizeUrlKey(currentUrl)
+            message.state.urlKey === normalizeUrlKey(stateUrl)
           ) {
             setState(message.state);
           }
@@ -1161,7 +1323,7 @@ export const OverlayApp: React.FC = () => {
             patch.isVisible = true;
           }
           void saveInspectMode(message.enabled).then(() =>
-            savePageState(message.url || currentUrl, patch)
+            savePageState(stateUrl, patch, stateScope)
           ).then((updated) => {
             setState(updated);
             if (!message.enabled) {
@@ -1188,9 +1350,9 @@ export const OverlayApp: React.FC = () => {
             ...a,
             id: idx + 1,
           }));
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             annotations: nextAnns,
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             sendResponse(updated);
           });
@@ -1206,9 +1368,9 @@ export const OverlayApp: React.FC = () => {
                 }
               : ann
           );
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             annotations: nextAnns,
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             sendResponse(updated);
           });
@@ -1222,9 +1384,9 @@ export const OverlayApp: React.FC = () => {
               ...ann,
               id: idx + 1,
             }));
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             annotations: nextAnns,
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             sendResponse(updated);
           });
@@ -1232,9 +1394,9 @@ export const OverlayApp: React.FC = () => {
         }
 
         case 'CLEAR_ANNOTATIONS': {
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             annotations: [],
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             setPopover(null);
             setHighlightTarget({ selector: null, id: null });
@@ -1244,9 +1406,9 @@ export const OverlayApp: React.FC = () => {
         }
 
         case 'UPDATE_GLOBAL_INSTRUCTION': {
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             globalInstruction: message.globalInstruction,
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             sendResponse(updated);
           });
@@ -1254,9 +1416,9 @@ export const OverlayApp: React.FC = () => {
         }
 
         case 'UPDATE_MASKING_CONFIG': {
-          void savePageState(message.url || currentUrl, {
+          void savePageState(stateUrl, {
             maskingConfig: message.maskingConfig,
-          }).then((updated) => {
+          }, stateScope).then((updated) => {
             setState(updated);
             sendResponse(updated);
           });
@@ -1280,7 +1442,8 @@ export const OverlayApp: React.FC = () => {
           const targetEl = findElementBySelectorOrXPath(
             message.selector,
             matchingAnn?.element.xpath,
-            previewRef.current?.doc ?? document
+            previewRef.current?.doc ?? document,
+            matchingAnn?.element.shadowHostSelectors
           );
           if (targetEl && typeof targetEl.scrollIntoView === 'function') {
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1319,24 +1482,35 @@ export const OverlayApp: React.FC = () => {
 
   const activeDoc = preview?.doc ?? document;
 
-  // Compute live bounding rects for annotated elements
+  // Compute live bounding rects for annotated elements. Annotations whose
+  // live element cannot be resolved are dropped instead of leaking a stale
+  // screen-coordinate ghost from the stored rect.
   const renderedAnnotations = useMemo(() => {
     void layoutTick;
-    return state.annotations.map((ann) => {
-      const maskedAnn = applyMaskingToAnnotation(ann, state.maskingConfig);
+    const results: Array<{
+      raw: AnnotationItem;
+      masked: AnnotationItem;
+      liveEl: Element;
+      rect: ElementRect;
+    }> = [];
+    for (const ann of state.annotations) {
       const liveEl = findElementBySelectorOrXPath(
         ann.element.selector,
         ann.element.xpath,
-        activeDoc
+        activeDoc,
+        ann.element.shadowHostSelectors
       );
-      const rect = liveEl ? toScreenRect(liveEl) : ann.element.rect;
-      return {
+      if (!liveEl) {
+        continue;
+      }
+      results.push({
         raw: ann,
-        masked: maskedAnn,
+        masked: applyMaskingToAnnotation(ann, state.maskingConfig),
         liveEl,
-        rect,
-      };
-    });
+        rect: toScreenRect(liveEl),
+      });
+    }
+    return results;
   }, [
     state.annotations,
     state.maskingConfig,
@@ -1423,10 +1597,14 @@ export const OverlayApp: React.FC = () => {
     }
 
     if (highlightTarget.selector) {
+      const selectorAnn = state.annotations.find(
+        (ann) => ann.element.selector === highlightTarget.selector
+      );
       const el = findElementBySelectorOrXPath(
         highlightTarget.selector,
         undefined,
-        activeDoc
+        activeDoc,
+        selectorAnn?.element.shadowHostSelectors
       );
       if (el) {
         return toScreenRect(el);
@@ -1438,6 +1616,7 @@ export const OverlayApp: React.FC = () => {
     activeDoc,
     highlightTarget,
     renderedAnnotations,
+    state.annotations,
     layoutTick,
     preview,
     toScreenRect,
@@ -1459,6 +1638,10 @@ export const OverlayApp: React.FC = () => {
     : null;
 
   const maskColor = state.maskingConfig.maskColor || '#FF00FF';
+  const overlayClipBounds = getOverlayClipBounds(preview);
+  const clippedHoverRect = hoveredInfo
+    ? clipRectToBounds(hoveredInfo.rect, overlayClipBounds)
+    : null;
   const maskStripeBg = `repeating-linear-gradient(45deg, ${hexToRgba(
     maskColor,
     0.2
@@ -1478,32 +1661,42 @@ export const OverlayApp: React.FC = () => {
       data-testid="dpa-overlay-root"
     >
       {/* Playwright-style Visual Mask overlays */}
-      {visualMaskRects.map((mask) => (
-        <div
-          key={mask.key}
-          className="dpa-visual-mask"
-          data-testid="dpa-visual-mask"
-          data-mask-selector={mask.selector}
-          style={{
-            left: `${mask.rect.x}px`,
-            top: `${mask.rect.y}px`,
-            width: `${mask.rect.width}px`,
-            height: `${mask.rect.height}px`,
-            borderColor: maskColor,
-            background: maskStripeBg,
-          }}
-        >
-          <span
-            className="dpa-visual-mask-tag"
-            style={{ backgroundColor: maskColor }}
+      {visualMaskRects.map((mask) => {
+        const clipped = clipRectToBounds(mask.rect, overlayClipBounds);
+        if (!clipped) {
+          return null;
+        }
+        return (
+          <div
+            key={mask.key}
+            className="dpa-visual-mask"
+            data-testid="dpa-visual-mask"
+            data-mask-selector={mask.selector}
+            style={{
+              left: `${clipped.x}px`,
+              top: `${clipped.y}px`,
+              width: `${clipped.width}px`,
+              height: `${clipped.height}px`,
+              borderColor: maskColor,
+              background: maskStripeBg,
+            }}
           >
-            MASKED
-          </span>
-        </div>
-      ))}
+            <span
+              className="dpa-visual-mask-tag"
+              style={{ backgroundColor: maskColor }}
+            >
+              MASKED
+            </span>
+          </div>
+        );
+      })}
 
       {/* Annotated elements outlines and numbered badges */}
       {renderedAnnotations.map(({ raw, rect }) => {
+        const clipped = clipRectToBounds(rect, overlayClipBounds);
+        if (!clipped) {
+          return null;
+        }
         const isHighlighted =
           highlightTarget.id === raw.id ||
           (highlightTarget.selector !== null &&
@@ -1516,10 +1709,16 @@ export const OverlayApp: React.FC = () => {
               findElementBySelectorOrXPath(
                 raw.element.selector,
                 raw.element.xpath,
-                activeDoc
+                activeDoc,
+                raw.element.shadowHostSelectors
               ),
               state.maskingConfig.maskSelectors
             ));
+
+        const maxBadgeLeft =
+          overlayClipBounds.left + overlayClipBounds.width - 24;
+        const maxBadgeTop =
+          overlayClipBounds.top + overlayClipBounds.height - 20;
 
         return (
           <React.Fragment key={raw.id}>
@@ -1529,10 +1728,10 @@ export const OverlayApp: React.FC = () => {
               }`}
               data-testid={`dpa-annotation-outline-${raw.id}`}
               style={{
-                left: `${rect.x}px`,
-                top: `${rect.y}px`,
-                width: `${rect.width}px`,
-                height: `${rect.height}px`,
+                left: `${clipped.x}px`,
+                top: `${clipped.y}px`,
+                width: `${clipped.width}px`,
+                height: `${clipped.height}px`,
               }}
             />
             <button
@@ -1543,8 +1742,14 @@ export const OverlayApp: React.FC = () => {
               data-testid={`dpa-badge-${raw.id}`}
               title={raw.instruction || `Annotation #${raw.id}`}
               style={{
-                left: `${Math.max(4, rect.x - 10)}px`,
-                top: `${Math.max(4, rect.y - 12)}px`,
+                left: `${Math.max(
+                  overlayClipBounds.left + 4,
+                  Math.min(rect.x - 10, maxBadgeLeft)
+                )}px`,
+                top: `${Math.max(
+                  overlayClipBounds.top + 4,
+                  Math.min(rect.y - 12, maxBadgeTop)
+                )}px`,
               }}
               onClick={(e) => handleOpenBadgePopover(raw, e)}
             >
@@ -1569,24 +1774,33 @@ export const OverlayApp: React.FC = () => {
       )}
 
       {/* Hover highlight box and tooltip when inspectMode is active */}
-      {state.inspectMode && hoveredInfo && !popover && (
+      {state.inspectMode && hoveredInfo && clippedHoverRect && !popover && (
         <>
           <div
             className="dpa-hover-box"
             data-testid="dpa-hover-box"
             style={{
-              left: `${hoveredInfo.rect.x}px`,
-              top: `${hoveredInfo.rect.y}px`,
-              width: `${hoveredInfo.rect.width}px`,
-              height: `${hoveredInfo.rect.height}px`,
+              left: `${clippedHoverRect.x}px`,
+              top: `${clippedHoverRect.y}px`,
+              width: `${clippedHoverRect.width}px`,
+              height: `${clippedHoverRect.height}px`,
             }}
           />
           <div
             className="dpa-hover-tooltip"
             data-testid="dpa-hover-tooltip"
             style={{
-              left: `${Math.max(8, hoveredInfo.rect.x)}px`,
-              top: `${Math.max(8, hoveredInfo.rect.y - 30)}px`,
+              left: `${Math.max(
+                overlayClipBounds.left + 8,
+                Math.min(
+                  hoveredInfo.rect.x,
+                  overlayClipBounds.left + overlayClipBounds.width - 160
+                )
+              )}px`,
+              top: `${Math.max(
+                overlayClipBounds.top + 8,
+                hoveredInfo.rect.y - 30
+              )}px`,
             }}
           >
             <span>{hoveredInfo.tagLabel}</span>
@@ -1775,7 +1989,8 @@ export const OverlayApp: React.FC = () => {
           const resolvedEl = findElementBySelectorOrXPath(
             ann.element.selector,
             ann.element.xpath,
-            previewRef.current?.doc ?? document
+            previewRef.current?.doc ?? document,
+            ann.element.shadowHostSelectors
           );
           setPopover({
             targetEl: resolvedEl,
@@ -1814,15 +2029,30 @@ export const OverlayApp: React.FC = () => {
         onCopyPrompt={handleCopyPrompt}
         isCopied={isCopied}
         onClose={handleCloseOverlay}
+        onMenuOpenChange={setBarMenuOpen}
       />
 
       {/* Floating Toast Notification */}
-      {toastMessage && (
+      {toast && (
         <div className="dpa-toast-alert" data-testid="dpa-toast-alert">
-          {!/^[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u.test(toastMessage) && (
-            <span className="dpa-icon-check">✓</span>
-          )}
-          <span>{toastMessage}</span>
+          {!/^[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u.test(
+            toast.message
+          ) &&
+            toast.kind === 'success' && (
+              <span className="dpa-icon-check">✓</span>
+            )}
+          {!/^[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u.test(
+            toast.message
+          ) &&
+            toast.kind === 'error' && (
+              <span
+                className="dpa-icon-warning"
+                style={{ color: '#f87171', fontWeight: 700 }}
+              >
+                !
+              </span>
+            )}
+          <span>{toast.message}</span>
         </div>
       )}
     </div>

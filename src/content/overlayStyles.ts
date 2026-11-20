@@ -202,6 +202,40 @@ export const OVERLAY_CSS = `
     }
   }
 
+  /* Below this width the text labels no longer fit; icons keep every control usable. */
+  @media (max-width: 560px) {
+    .dpa-bottom-bar .dpa-btn-text {
+      display: none;
+    }
+  }
+
+  /* Ultra-narrow phones: compact the device selector so the bar stays inside viewport - 24px. */
+  @media (max-width: 360px) {
+    .dpa-bottom-bar {
+      gap: 2px;
+      padding: 2px 4px;
+      max-width: calc(100vw - 24px);
+    }
+    .dpa-btn-device-label,
+    .dpa-device-badge {
+      display: none;
+    }
+    .dpa-divider {
+      display: none;
+    }
+  }
+
+  @keyframes dpaMenuSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   .dpa-divider {
     width: 1px;
     height: 18px;
@@ -358,7 +392,7 @@ export const OVERLAY_CSS = `
     -webkit-backdrop-filter: blur(16px);
     padding: 6px;
     z-index: 2147483647;
-    animation: dpaFadeSlideUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: dpaMenuSlideUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .dpa-menu-header {
@@ -493,7 +527,7 @@ export const OVERLAY_CSS = `
     backdrop-filter: blur(16px);
     padding: 5px;
     z-index: 2147483647;
-    animation: dpaFadeSlideUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: dpaMenuSlideUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   /* 6. Minimize Button */
@@ -605,6 +639,25 @@ export const OVERLAY_CSS = `
     .dpa-btn-minimize,
     .dpa-btn-close {
       width: 22px;
+    }
+  }
+
+  /* Must follow the 480px block so the compact widths win the cascade. */
+  @media (max-width: 360px) {
+    .dpa-btn-device {
+      width: 90px;
+      max-width: 90px;
+      min-width: 90px;
+    }
+    .dpa-device-selector-wrap--active .dpa-btn-device {
+      /* 64 + gap (2) + rotate (24) = 90: idle and active totals stay identical. */
+      width: 64px;
+      max-width: 64px;
+      min-width: 64px;
+    }
+    .dpa-btn-minimize,
+    .dpa-btn-close {
+      width: 20px;
     }
   }
 
@@ -946,6 +999,7 @@ export const OVERLAY_CSS = `
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
     transition: border-color 0.12s ease, background 0.12s ease;
   }
 
@@ -1007,6 +1061,11 @@ export const OVERLAY_CSS = `
     padding: 6px 8px;
     border-radius: 6px;
     border: 1px solid rgba(255, 255, 255, 0.04);
+    min-width: 0;
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .dpa-annotation-card-actions {
@@ -1014,6 +1073,8 @@ export const OVERLAY_CSS = `
     align-items: center;
     justify-content: space-between;
     padding-top: 2px;
+    gap: 6px;
+    min-width: 0;
   }
 
   .dpa-annotation-selector-mono {
@@ -1021,6 +1082,8 @@ export const OVERLAY_CSS = `
     color: #737373;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     max-width: 260px;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1179,6 +1242,54 @@ export const OVERLAY_CSS = `
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
     padding: 10px;
+  }
+
+  .dpa-mask-color-section {
+    background: #222222;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  .dpa-mask-color-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .dpa-input-color {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 40px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .dpa-input-color::-webkit-color-swatch-wrapper {
+    padding: 2px;
+  }
+
+  .dpa-input-color::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+
+  .dpa-input-color::-moz-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+
+  .dpa-mask-color-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #cbd5e1;
+    text-transform: uppercase;
   }
 
   .dpa-section-label {
@@ -1349,7 +1460,7 @@ export const OVERLAY_CSS = `
     border-radius: 3px;
     border-width: 2px;
     border-style: solid;
-    z-index: 2147483640;
+    z-index: 2147483644;
     display: flex;
     align-items: flex-start;
     justify-content: flex-end;
