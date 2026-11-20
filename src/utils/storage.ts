@@ -49,8 +49,9 @@ export function normalizeUrlKey(url: string): string {
   }
 }
 
-export function getStorageKey(url: string): string {
-  return `${STORAGE_KEY_PREFIX}${normalizeUrlKey(url)}`;
+export function getStorageKey(url: string, scopeId?: string): string {
+  const base = `${STORAGE_KEY_PREFIX}${normalizeUrlKey(url)}`;
+  return scopeId ? `${base}::tab:${scopeId}` : base;
 }
 
 export function createDefaultPageState(url: string): PageAnnotationState {
@@ -219,8 +220,11 @@ function sanitizePageState(
   };
 }
 
-export async function getPageState(url: string): Promise<PageAnnotationState> {
-  const storageKey = getStorageKey(url);
+export async function getPageState(
+  url: string,
+  scopeId?: string
+): Promise<PageAnnotationState> {
+  const storageKey = getStorageKey(url, scopeId);
 
   const result = await withSessionStorage((area) => area.get(storageKey));
   if (result.ok) {
@@ -235,10 +239,11 @@ export async function getPageState(url: string): Promise<PageAnnotationState> {
 
 export async function savePageState(
   url: string,
-  statePatch: PageAnnotationStatePatch
+  statePatch: PageAnnotationStatePatch,
+  scopeId?: string
 ): Promise<PageAnnotationState> {
-  const storageKey = getStorageKey(url);
-  const current = await getPageState(url);
+  const storageKey = getStorageKey(url, scopeId);
+  const current = await getPageState(url, scopeId);
 
   const nextState: PageAnnotationState = sanitizePageState(url, {
     ...current,
@@ -260,8 +265,11 @@ export async function savePageState(
   return nextState;
 }
 
-export async function clearPageState(url: string): Promise<void> {
-  const storageKey = getStorageKey(url);
+export async function clearPageState(
+  url: string,
+  scopeId?: string
+): Promise<void> {
+  const storageKey = getStorageKey(url, scopeId);
 
   const result = await withSessionStorage((area) => area.remove(storageKey));
   if (!result.ok) {

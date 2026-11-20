@@ -118,6 +118,15 @@ export function handleRuntimeMessage(
     return true;
   }
 
+  if (message.type === 'GET_TAB_ID') {
+    const tabId =
+      sender && sender.tab && typeof sender.tab.id === 'number'
+        ? sender.tab.id
+        : null;
+    sendResponse({ tabId });
+    return false;
+  }
+
   if (message.type === 'GET_PAGE_STATE') {
     const targetUrl = message.url || sender?.tab?.url || '';
     void getPageState(targetUrl).then(sendResponse);
@@ -151,7 +160,11 @@ export function handleRuntimeMessage(
 
   // If the Side Panel sends a tab-targeted message via runtime.sendMessage (where sender.tab is undefined),
   // forward it to the active tab automatically.
-  const nonForwardedTypes = ['PAGE_STATE_UPDATED', 'ENSURE_STATE_ACCESS'];
+  const nonForwardedTypes = [
+    'PAGE_STATE_UPDATED',
+    'ENSURE_STATE_ACCESS',
+    'GET_TAB_ID',
+  ];
   if (!sender?.tab && !nonForwardedTypes.includes(message.type)) {
     if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
       void chrome.tabs

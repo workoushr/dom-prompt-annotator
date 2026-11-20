@@ -65,6 +65,13 @@ function sanitizeExportPayloadWithMasking(payload: ExportPayload): ExportPayload
     instruction: config.autoMaskPII
       ? maskPII(ann.instruction || '')
       : ann.instruction || '',
+    element:
+      ann.element && ann.element.shadowHostSelectors?.length
+        ? {
+            ...ann.element,
+            shadowHostSelectors: [...ann.element.shadowHostSelectors],
+          }
+        : ann.element,
   }));
 
   return {

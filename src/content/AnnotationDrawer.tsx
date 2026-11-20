@@ -360,6 +360,28 @@ export const AnnotationDrawer: React.FC<AnnotationDrawerProps> = ({
               </label>
             </div>
 
+            {/* Mask Color */}
+            <div className="dpa-mask-color-section">
+              <label className="dpa-section-label" htmlFor="dpa-mask-color-input">
+                マスクカラー
+              </label>
+              <div className="dpa-mask-color-row">
+                <input
+                  id="dpa-mask-color-input"
+                  type="color"
+                  className="dpa-input-color"
+                  data-testid="dpa-drawer-mask-color"
+                  value={maskingConfig.maskColor || '#FF00FF'}
+                  onChange={(e) =>
+                    onUpdateMaskingConfig({ maskColor: e.target.value })
+                  }
+                />
+                <code className="dpa-mask-color-value">
+                  {maskingConfig.maskColor || '#FF00FF'}
+                </code>
+              </div>
+            </div>
+
             {/* Custom Selectors */}
             <div className="dpa-custom-selectors-section">
               <div className="dpa-section-label">カスタム伏字セレクタ</div>

@@ -89,6 +89,13 @@
       color: #2563eb;
       font-size: 14px;
     }
+    .shadow-demo {
+      margin-top: 24px;
+    }
+    .shadow-demo h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
   </style>
 </head>
 <body>
@@ -119,6 +126,44 @@
         title="secret-span-title-9f3a"
       >secret-span-text-9f3a</span>
     </section>
+    <section class="shadow-demo">
+      <h2>Shadow DOM</h2>
+      <div id="shadow-host"></div>
+    </section>
   </main>
+  <script>
+    (() => {
+      const host = document.getElementById('shadow-host');
+      if (!host || !host.attachShadow) return;
+      const root = host.attachShadow({ mode: 'open' });
+      const style = document.createElement('style');
+      style.textContent = `
+        :host {
+          display: block;
+          margin-top: 8px;
+          padding: 20px;
+          border: 1px dashed #6366f1;
+          border-radius: 6px;
+          background: #eef2ff;
+        }
+        button {
+          height: 32px;
+          padding: 0 14px;
+          border: 0;
+          border-radius: 6px;
+          color: #ffffff;
+          background: #4f46e5;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+      `;
+      const button = document.createElement('button');
+      button.id = 'shadow-btn';
+      button.type = 'button';
+      button.textContent = 'Shadow action';
+      root.append(style, button);
+    })();
+  </script>
 </body>
 </html>

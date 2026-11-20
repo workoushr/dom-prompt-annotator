@@ -113,22 +113,33 @@ async function startStaticServer() {
       pathname = `${pathname}fixture.html`;
     }
 
-    const filePath = path.resolve(e2eDir, `.${pathname}`);
+    let filePath = path.resolve(e2eDir, `.${pathname}`);
     if (filePath !== e2eDir && !filePath.startsWith(`${e2eDir}${path.sep}`)) {
       res.writeHead(403);
       res.end('Forbidden');
       return;
     }
 
-    let stat;
+    let stat = null;
     try {
       stat = fs.statSync(filePath);
     } catch {
-      res.writeHead(404);
-      res.end('Not Found');
-      return;
+      stat = null;
     }
-    if (!stat.isFile()) {
+
+    // SPA-style extensionless routes (e.g. /spa-route) fall back to the
+    // fixture so history.pushState + reload can be exercised without a 404.
+    if ((!stat || !stat.isFile()) && !path.extname(filePath)) {
+      const fallbackPath = path.join(e2eDir, 'fixture.html');
+      try {
+        stat = fs.statSync(fallbackPath);
+        filePath = fallbackPath;
+      } catch {
+        stat = null;
+      }
+    }
+
+    if (!stat || !stat.isFile()) {
       res.writeHead(404);
       res.end('Not Found');
       return;
@@ -344,6 +355,38 @@ async function main() {
         `Clipboard never contained ${JSON.stringify(text)} within ${CLIPBOARD_WAIT}ms` +
           (lastError ? ` (last error: ${lastError.message})` : '')
       );
+    };
+
+    // Content scripts run in the "DOM Prompt Annotator" isolated world. React
+    // props/handlers are only visible there, not in the page main world.
+    const runInExtensionWorld = async (expression) => {
+      const cdp = await context.newCDPSession(page);
+      const contexts = [];
+      cdp.on('Runtime.executionContextCreated', (event) => {
+        contexts.push(event.context);
+      });
+      try {
+        await cdp.send('Runtime.enable');
+        await delay(50);
+        const contextInfo =
+          contexts.find((c) => c.name === 'DOM Prompt Annotator') ??
+          contexts.find((c) => c.auxData?.type === 'isolated');
+        assert(contextInfo, 'Extension isolated world was not found.');
+        const result = await cdp.send('Runtime.evaluate', {
+          expression,
+          contextId: contextInfo.id,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        if (result.exceptionDetails) {
+          throw new HarnessError(
+            `Extension-world evaluation failed: ${JSON.stringify(result.exceptionDetails)}`
+          );
+        }
+        return result.result?.value;
+      } finally {
+        await cdp.detach().catch(() => {});
+      }
     };
 
     const setInspectPreference = async (inspectMode) => {
@@ -758,6 +801,476 @@ async function main() {
       } finally {
         await resetDevicePreview();
       }
+    });
+
+    const setViewport = async (width, height) => {
+      await page.setViewportSize({ width, height });
+      await delay(250);
+    };
+
+    const resetViewport = async () => {
+      await setViewport(1280, 900);
+    };
+
+    const gotoFixtureWithBar = async () => {
+      await page.goto(fixtureUrl, { waitUntil: 'load' });
+      await bar.waitFor({ state: 'visible' });
+      await delay(250);
+    };
+
+    const assertBoxWithin = (inner, outer, label) => {
+      assert(inner, `${label}: inner bounding box is unavailable.`);
+      assert(outer, `${label}: outer bounding box is unavailable.`);
+      const epsilon = 1;
+      assert(
+        inner.x >= outer.x - epsilon,
+        `${label}: inner x=${inner.x.toFixed(2)} is left of outer x=${outer.x.toFixed(2)}.`
+      );
+      assert(
+        inner.y >= outer.y - epsilon,
+        `${label}: inner y=${inner.y.toFixed(2)} is above outer y=${outer.y.toFixed(2)}.`
+      );
+      assert(
+        inner.x + inner.width <= outer.x + outer.width + epsilon,
+        `${label}: inner right=${(inner.x + inner.width).toFixed(2)} exceeds outer right=${(outer.x + outer.width).toFixed(2)}.`
+      );
+      assert(
+        inner.y + inner.height <= outer.y + outer.height + epsilon,
+        `${label}: inner bottom=${(inner.y + inner.height).toFixed(2)} exceeds outer bottom=${(outer.y + outer.height).toFixed(2)}.`
+      );
+    };
+
+    // 11. SPA pushState must not re-key the mounted page state, and reload must
+    // still clear markings on the new document.
+    await runCheck('SPA pushState keeps the bar and reload clears markings', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+      const errorsBefore = pageErrors.length;
+
+      await page.evaluate(() => history.pushState({}, '', '/spa-route'));
+      await delay(300);
+      assert(
+        (await page.evaluate(() => window.location.pathname)) === '/spa-route',
+        'history.pushState did not update the URL to /spa-route.'
+      );
+      assert(await bar.isVisible(), 'Bottom bar disappeared after SPA pushState.');
+
+      await addAnnotation('#email', 'Make this email required after pushState');
+      await badge1.waitFor({ state: 'visible' });
+      assert((await badge1.count()) === 1, 'Expected one badge after SPA pushState annotation.');
+      assert(
+        pageErrors.length === errorsBefore,
+        `SPA pushState raised page error(s): ${pageErrors
+          .slice(errorsBefore)
+          .map((error) => error.message)
+          .join(' | ')}`
+      );
+
+      await page.reload({ waitUntil: 'load' });
+      await bar.waitFor({ state: 'visible' });
+      await delay(1000);
+      const badgeCount = await badge1.count();
+      assert(badgeCount === 0, `Expected no badges after reloading an SPA route, found ${badgeCount}.`);
+      const drawerText = (await drawerBtn.textContent())?.replace(/\s+/g, ' ').trim() ?? '';
+      assert(
+        drawerText.includes('0'),
+        `Expected drawer count 0 after SPA reload, got ${JSON.stringify(drawerText)}.`
+      );
+      assert(
+        pageErrors.length === errorsBefore,
+        `SPA reload raised page error(s): ${pageErrors
+          .slice(errorsBefore)
+          .map((error) => error.message)
+          .join(' | ')}`
+      );
+    });
+
+    // 12. Two tabs on the same URL must have isolated ephemeral page state, and
+    // closing the bar in one tab must not affect the other.
+    await runCheck('same-URL tabs keep isolated bar state', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+
+      const pageB = await context.newPage();
+      pageB.setDefaultTimeout(WAIT);
+      pageB.on('pageerror', (error) => {
+        pageErrors.push(error);
+      });
+      pageB.on('console', (message) => {
+        if (message.type() === 'error') consoleErrors.push(message.text());
+      });
+      const barB = pageB.locator('[data-testid="dpa-bottom-bar"]');
+      try {
+        await pageB.goto(fixtureUrl, { waitUntil: 'load' });
+        await barB.waitFor({ state: 'visible' });
+
+        await addAnnotation('#email', 'Tab A only annotation');
+        await badge1.waitFor({ state: 'visible' });
+        const badgeCountB = await pageB.locator('[data-testid="dpa-badge-1"]').count();
+        assert(
+          badgeCountB === 0,
+          `Same-URL tab B saw ${badgeCountB} annotation badge(s) from tab A.`
+        );
+
+        await page.locator('[data-testid="dpa-bottom-bar-close-btn"]').click();
+        await delay(400);
+        assert(
+          (await page.locator('[data-testid="dpa-bottom-bar"]').count()) === 0,
+          'Tab A bottom bar still exists after clicking close.'
+        );
+        const paddingA = await page.evaluate(() => document.body.style.paddingBottom);
+        assert(
+          paddingA === '',
+          `Tab A body padding should be restored after close, got ${JSON.stringify(paddingA)}.`
+        );
+
+        assert(await barB.isVisible(), 'Tab B bottom bar disappeared after tab A closed its bar.');
+        const paddingB = await pageB.evaluate(() => document.body.style.paddingBottom);
+        assert(
+          paddingB === '72px',
+          `Tab B body padding should remain 72px, got ${JSON.stringify(paddingB)}.`
+        );
+      } finally {
+        await pageB.close();
+      }
+    });
+
+    // 13. Narrow viewports must not clip or overflow toolbar controls.
+    await runCheck('bottom bar fits narrow viewports', async () => {
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+
+      for (const width of [320, 360]) {
+        await setViewport(width, 800);
+        const metrics = await bar.evaluate((barEl) => {
+          const rect = barEl.getBoundingClientRect();
+          const controls = Array.from(barEl.querySelectorAll('button')).map((el) => {
+            const r = el.getBoundingClientRect();
+            return {
+              label: el.getAttribute('data-testid') || el.className,
+              x: r.x,
+              y: r.y,
+              width: r.width,
+              height: r.height,
+            };
+          });
+          return {
+            scrollWidth: barEl.scrollWidth,
+            clientWidth: barEl.clientWidth,
+            bar: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            controls,
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+          };
+        });
+
+        assert(
+          metrics.scrollWidth <= metrics.clientWidth,
+          `At ${width}px the bar scrollWidth ${metrics.scrollWidth} exceeds clientWidth ${metrics.clientWidth}.`
+        );
+        assert(metrics.controls.length > 0, `At ${width}px no toolbar controls were found.`);
+        for (const control of metrics.controls) {
+          assert(
+            control.x >= -0.5,
+            `At ${width}px control ${control.label} starts at x=${control.x.toFixed(2)} (< 0).`
+          );
+          assert(
+            control.x + control.width <= metrics.innerWidth + 0.5,
+            `At ${width}px control ${control.label} ends at ${(control.x + control.width).toFixed(2)} (> ${metrics.innerWidth}).`
+          );
+          assert(
+            control.y >= -0.5 && control.y + control.height <= metrics.innerHeight + 0.5,
+            `At ${width}px control ${control.label} is vertically outside the viewport (y=${control.y.toFixed(2)}, height=${control.height.toFixed(2)}).`
+          );
+        }
+        assert(
+          metrics.bar.x >= -0.5 && metrics.bar.x + metrics.bar.width <= metrics.innerWidth + 0.5,
+          `At ${width}px the bar itself spans ${metrics.bar.x.toFixed(2)}..${(metrics.bar.x + metrics.bar.width).toFixed(2)} outside the viewport.`
+        );
+
+        await page.locator('[data-testid="dpa-copy-format-toggle-btn"]').click();
+        const copyMenu = page.locator('[data-testid="dpa-copy-menu"]');
+        await copyMenu.waitFor({ state: 'visible' });
+        await page.keyboard.press('Escape');
+        await copyMenu.waitFor({ state: 'hidden' });
+      }
+      await resetViewport();
+    });
+
+    // 14. Escape closes an open flyout menu without toggling inspect mode or
+    // hiding the bar.
+    await runCheck('Escape closes the device menu without side effects', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+      const deviceMenu = page.locator('[data-testid="dpa-device-menu"]');
+      await deviceBtn.click();
+      await deviceMenu.waitFor({ state: 'visible' });
+
+      await page.keyboard.press('Escape');
+      await deviceMenu.waitFor({ state: 'hidden' });
+      const selectText = (await page
+        .locator('[data-testid="dpa-bottom-bar-select-btn"]')
+        .textContent())?.replace(/\s+/g, ' ').trim() ?? '';
+      assert(
+        selectText.includes('選択中'),
+        `Expected the select pill to stay in 選択中 after Escape, got ${JSON.stringify(selectText)}.`
+      );
+      assert(
+        (await readInspectPreference())?.inspectMode === true,
+        'Escape on an open menu must not persist inspectMode: false.'
+      );
+      assert(await bar.isVisible(), 'Bottom bar disappeared after closing the device menu with Escape.');
+    });
+
+    // 15. Inspect mode must resolve elements inside open shadow roots, and
+    // annotations must export the inner element plus its host chain.
+    await runCheck('shadow DOM selection targets the inner element', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+
+      const shadowHost = page.locator('#shadow-host');
+      await shadowHost.locator('#shadow-btn').click();
+      await popover.waitFor({ state: 'visible' });
+
+      const selectorText = (await page
+        .locator('[data-testid="dpa-popover-selector"]')
+        .textContent())?.trim() ?? '';
+      const tagText = (await page
+        .locator('[data-testid="dpa-popover-tag"]')
+        .textContent())?.trim() ?? '';
+      assert(
+        selectorText === '#shadow-btn',
+        `Expected popover selector "#shadow-btn" for the inner shadow button, got ${JSON.stringify(selectorText)}.`
+      );
+      assert(
+        tagText.includes('button') && tagText.includes('shadow-btn'),
+        `Expected popover tag to describe the inner button, got ${JSON.stringify(tagText)}.`
+      );
+
+      await instructionTextarea.fill('Keep the shadow button clickable');
+      await saveBtn.click();
+      await popover.waitFor({ state: 'hidden' });
+      await badge1.waitFor({ state: 'visible' });
+      await delay(150);
+
+      const rects = await page.evaluate(() => {
+        const host = document.querySelector('#shadow-host');
+        const inner = host?.shadowRoot?.querySelector('#shadow-btn');
+        if (!host || !inner) throw new Error('Shadow fixture elements are missing.');
+        const h = host.getBoundingClientRect();
+        const r = inner.getBoundingClientRect();
+        return {
+          host: { x: h.x, y: h.y, width: h.width, height: h.height },
+          inner: { x: r.x, y: r.y, width: r.width, height: r.height },
+        };
+      });
+
+      const outlineBox = await page
+        .locator('[data-testid="dpa-annotation-outline-1"]')
+        .boundingBox();
+      const badgeBox = await page.locator('[data-testid="dpa-badge-1"]').boundingBox();
+      assert(outlineBox, 'Shadow annotation outline has no bounding box.');
+      assert(badgeBox, 'Shadow annotation badge has no bounding box.');
+
+      for (const key of ['x', 'y', 'width', 'height']) {
+        assert(
+          Math.abs(outlineBox[key] - rects.inner[key]) <= BBOX_TOLERANCE,
+          `Shadow outline ${key}=${outlineBox[key].toFixed(2)} does not match inner button ${key}=${rects.inner[key].toFixed(2)}.`
+        );
+      }
+      assertBoxWithin(outlineBox, rects.host, 'shadow annotation outline');
+      assertBoxWithin(badgeBox, rects.host, 'shadow annotation badge');
+
+      await page.locator('[data-testid="dpa-copy-format-toggle-btn"]').click();
+      await page.locator('[data-testid="dpa-copy-json-btn"]').click();
+      await waitForClipboardContains('#shadow-btn');
+      const clipboard = await readClipboard();
+      let payload;
+      try {
+        payload = JSON.parse(clipboard);
+      } catch (error) {
+        throw new HarnessError(
+          `Shadow annotation JSON export was not valid JSON: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      const annotation = payload.annotations?.[0];
+      assert(annotation, 'Shadow JSON export contained no annotation.');
+      const element = annotation.element ?? {};
+      assert(element.tagName === 'button', `Exported shadow tagName should be "button", got ${JSON.stringify(element.tagName)}.`);
+      assert(element.id === 'shadow-btn', `Exported shadow id should be "shadow-btn", got ${JSON.stringify(element.id)}.`);
+      assert(
+        element.selector === '#shadow-btn',
+        `Exported shadow selector should be "#shadow-btn", got ${JSON.stringify(element.selector)}.`
+      );
+      assert(
+        Array.isArray(element.shadowHostSelectors) &&
+          element.shadowHostSelectors.includes('#shadow-host'),
+        `Expected shadowHostSelectors to include "#shadow-host", got ${JSON.stringify(element.shadowHostSelectors)}.`
+      );
+
+      await badge1.waitFor({ state: 'hidden', timeout: COPY_CLEAR_WAIT }).catch(() => {});
+      assert((await badge1.count()) === 0, 'Copy should clear the shadow annotation.');
+    });
+
+    // 16. The drawer mask color must drive the visual mask's computed border.
+    await runCheck('mask color picker updates the visual mask', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+
+      await drawerBtn.click();
+      const drawer = page.locator('[data-testid="dpa-drawer"]');
+      await drawer.waitFor({ state: 'visible' });
+      await page.locator('[data-testid="dpa-drawer-tab-privacy"]').click();
+
+      const colorInput = page.locator('[data-testid="dpa-drawer-mask-color"]');
+      await colorInput.waitFor({ state: 'visible' });
+      await colorInput.scrollIntoViewIfNeeded();
+      // Native color pickers cannot be driven in headless Chrome, and React
+      // handlers live in the extension's isolated world. Invoke the actual
+      // React onChange prop there, then assert the full state -> storage ->
+      // visual-mask path.
+      await runInExtensionWorld(`(() => {
+        const shadow = document.querySelector('#dpa-root-host')?.shadowRoot;
+        const el = shadow?.querySelector('[data-testid="dpa-drawer-mask-color"]');
+        if (!el) throw new Error('mask color input missing');
+        const propsKey = Object.getOwnPropertyNames(el).find((key) =>
+          key.startsWith('__reactProps$')
+        );
+        if (!propsKey || !el[propsKey]?.onChange) {
+          throw new Error('React onChange prop missing on color input');
+        }
+        el[propsKey].onChange({ target: { value: '#00ff88' } });
+        return el[propsKey].value;
+      })()`);
+      // React is controlled: the value can briefly revert until onChange's
+      // storage/state round-trip completes. Poll instead of asserting instantly.
+      let inputValue = '';
+      const inputDeadline = Date.now() + WAIT;
+      while (Date.now() < inputDeadline) {
+        inputValue = await colorInput.inputValue();
+        if (inputValue === '#00ff88') break;
+        await delay(100);
+      }
+      assert(
+        inputValue === '#00ff88',
+        `The mask color input did not accept #00ff88 (got ${JSON.stringify(inputValue)}).`
+      );
+
+      const expectedColor = 'rgb(0, 255, 136)';
+      let observed = null;
+      const deadline = Date.now() + WAIT;
+      while (Date.now() < deadline) {
+        observed = await page
+          .locator('[data-testid="dpa-visual-mask"]')
+          .evaluateAll((masks) => ({
+            masks: masks.map((mask) => ({
+              selector: mask.getAttribute('data-mask-selector'),
+              borderColor: getComputedStyle(mask).borderColor,
+            })),
+          }));
+        if (observed.masks.some((mask) => mask.borderColor === expectedColor)) {
+          break;
+        }
+        await delay(100);
+      }
+      const stored = await (await getExtensionWorker()).evaluate(async () => {
+        const all = await chrome.storage.session.get(null);
+        return Object.entries(all)
+          .filter(([key]) => key.startsWith('dpa_page_state:'))
+          .map(([, value]) => value?.maskingConfig?.maskColor ?? null);
+      });
+      assert(
+        observed.masks.some((mask) => mask.borderColor === expectedColor),
+        `Expected a visual mask with borderColor ${expectedColor}, got ${JSON.stringify(observed.masks)} (stored=${JSON.stringify(stored)}).`
+      );
+
+      assert(
+        stored.includes('#00ff88'),
+        `Expected stored maskingConfig.maskColor "#00ff88", got ${JSON.stringify(stored)}.`
+      );
+
+      await page.locator('[data-testid="dpa-drawer-close-btn"]').click();
+      await drawer.waitFor({ state: 'detached', timeout: WAIT }).catch(() => {});
+    });
+
+    // 17. A very long unbroken instruction must wrap inside the drawer instead
+    // of creating horizontal scrolling.
+    await runCheck('drawer wraps long annotation text', async () => {
+      await resetViewport();
+      await setInspectPreference(true);
+      await gotoFixtureWithBar();
+
+      const longInstruction = `${'W'.repeat(600)}\n${'Z'.repeat(600)}`;
+      await addAnnotation('#email', longInstruction);
+      await badge1.waitFor({ state: 'visible' });
+
+      await drawerBtn.click();
+      const drawer = page.locator('[data-testid="dpa-drawer"]');
+      await drawer.waitFor({ state: 'visible' });
+      const card = page.locator('[data-testid="annotation-card-1"]');
+      await card.waitFor({ state: 'visible' });
+
+      const drawerMetrics = await drawer.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }));
+      const contentMetrics = await page
+        .locator('[data-testid="dpa-drawer-content-annotations"]')
+        .evaluate((el) => ({
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+        }));
+      const instructionMetrics = await page
+        .locator('[data-testid="annotation-card-1"] .dpa-annotation-instruction')
+        .evaluate((el) => ({
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+        }));
+      const pageMetrics = await page.evaluate(() => {
+        const body = document.body;
+        return {
+          body: {
+            scrollWidth: body.scrollWidth,
+            clientWidth: body.clientWidth,
+          },
+          document: {
+            scrollWidth: document.documentElement.scrollWidth,
+            innerWidth: window.innerWidth,
+          },
+        };
+      });
+      const metrics = {
+        drawer: drawerMetrics,
+        content: contentMetrics,
+        instruction: instructionMetrics,
+        body: pageMetrics.body,
+        document: pageMetrics.document,
+      };
+
+      for (const [label, value] of [
+        ['drawer', metrics.drawer],
+        ['drawer content', metrics.content],
+        ['instruction', metrics.instruction],
+        ['body', metrics.body],
+      ]) {
+        assert(
+          value.scrollWidth <= value.clientWidth,
+          `${label} overflows horizontally: scrollWidth ${value.scrollWidth} > clientWidth ${value.clientWidth}.`
+        );
+      }
+      assert(
+        metrics.document.scrollWidth <= metrics.document.innerWidth,
+        `Document overflows horizontally: scrollWidth ${metrics.document.scrollWidth} > innerWidth ${metrics.document.innerWidth}.`
+      );
+
+      await page.locator('[data-testid="dpa-drawer-delete-1"]').click();
+      await page.locator('[data-testid="dpa-drawer-close-btn"]').click();
+      await drawer.waitFor({ state: 'detached', timeout: WAIT }).catch(() => {});
     });
 
     // 10. No uncaught page errors during the run.

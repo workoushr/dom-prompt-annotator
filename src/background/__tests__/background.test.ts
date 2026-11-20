@@ -308,6 +308,47 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(state.inspectMode).toBe(true);
   });
 
+  it('responds to GET_TAB_ID with the sender tab id', () => {
+    const sendResponse = vi.fn();
+    const handled = handleRuntimeMessage(
+      { type: 'GET_TAB_ID' },
+      { tab: { id: 123 } } as unknown as chrome.runtime.MessageSender,
+      sendResponse
+    );
+
+    expect(handled).toBe(false);
+    expect(sendResponse).toHaveBeenCalledWith({ tabId: 123 });
+  });
+
+  it('responds to GET_TAB_ID with null when there is no sender tab', () => {
+    const sendResponse = vi.fn();
+    handleRuntimeMessage(
+      { type: 'GET_TAB_ID' },
+      {} as chrome.runtime.MessageSender,
+      sendResponse
+    );
+
+    expect(sendResponse).toHaveBeenCalledWith({ tabId: null });
+  });
+
+  it('does not forward GET_TAB_ID when sent without a sender tab', () => {
+    const queryMock = vi.fn();
+    (globalThis as Record<string, unknown>).chrome = {
+      tabs: { query: queryMock, sendMessage: vi.fn() },
+    };
+
+    const sendResponse = vi.fn();
+    const handled = handleRuntimeMessage(
+      { type: 'GET_TAB_ID' },
+      {} as chrome.runtime.MessageSender,
+      sendResponse
+    );
+
+    expect(handled).toBe(false);
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(sendResponse).toHaveBeenCalledWith({ tabId: null });
+  });
+
   it('grants untrusted contexts access to session storage on ENSURE_STATE_ACCESS', async () => {
     const setAccessLevelMock = vi.fn().mockResolvedValue(undefined);
 

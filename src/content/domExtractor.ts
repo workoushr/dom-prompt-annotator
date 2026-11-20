@@ -75,9 +75,36 @@ export function escapeCssIdentifier(value: string): string {
     .replace(/^(\d)/, '\\3$1 ');
 }
 
-function isUniqueSelector(selector: string, doc: Document): boolean {
+type SelectorRoot = Document | ShadowRoot;
+
+/**
+ * Returns the root that scopes selector generation/querying for `el`:
+ * the containing `ShadowRoot` for shadow-DOM elements, otherwise the `Document`.
+ * Crossing a shadow boundary requires the host chain (`shadowHostSelectors`).
+ */
+function getSelectorRoot(el: Element): SelectorRoot {
+  const rootNode = typeof el.getRootNode === 'function' ? el.getRootNode() : null;
+  if (
+    rootNode &&
+    (rootNode.nodeType === 9 || isShadowRoot(rootNode)) &&
+    typeof (rootNode as ParentNode).querySelectorAll === 'function'
+  ) {
+    return rootNode as SelectorRoot;
+  }
+  return el.ownerDocument || document;
+}
+
+function isShadowRoot(node: Node | null | undefined): node is ShadowRoot {
+  return Boolean(
+    node &&
+      node.nodeType === 11 &&
+      typeof (node as ShadowRoot).host !== 'undefined'
+  );
+}
+
+function isUniqueSelector(selector: string, root: SelectorRoot): boolean {
   try {
-    return doc.querySelectorAll(selector).length === 1;
+    return root.querySelectorAll(selector).length === 1;
   } catch {
     return false;
   }
@@ -122,12 +149,15 @@ function getSemanticClasses(el: Element): string[] {
   return [...simpleClasses, ...complexTailwindClasses].slice(0, 2);
 }
 
-function buildElementSelectorSegment(el: Element, doc: Document): string {
+function buildElementSelectorSegment(
+  el: Element,
+  root: SelectorRoot
+): string {
   const tag = el.tagName.toLowerCase();
 
   if (el.id && el.id.trim()) {
     const idSel = `#${escapeCssIdentifier(el.id.trim())}`;
-    if (isUniqueSelector(idSel, doc)) {
+    if (isUniqueSelector(idSel, root)) {
       return idSel;
     }
   }
@@ -137,7 +167,7 @@ function buildElementSelectorSegment(el: Element, doc: Document): string {
     if (val && val.trim()) {
       const escapedVal = val.trim().replace(/"/g, '\\"');
       const attrSel = `${tag}[${attr}="${escapedVal}"]`;
-      if (isUniqueSelector(attrSel, doc)) {
+      if (isUniqueSelector(attrSel, root)) {
         return attrSel;
       }
       return attrSel;
@@ -150,15 +180,18 @@ function buildElementSelectorSegment(el: Element, doc: Document): string {
     segment += classes.map((c) => `.${escapeCssIdentifier(c)}`).join('');
   }
 
-  const parent = el.parentElement;
+  const parent: ParentNode | null =
+    el.parentElement ??
+    (isShadowRoot(el.parentNode) ? (el.parentNode as ShadowRoot) : null);
   if (parent) {
-    const sameTagSiblings = Array.from(parent.children).filter(
+    const children = parent.children;
+    const sameTagSiblings = Array.from(children).filter(
       (child) => child.tagName === el.tagName
     );
     if (sameTagSiblings.length > 1) {
       let matchesInParent = 0;
       try {
-        matchesInParent = Array.from(parent.children).filter((child) =>
+        matchesInParent = Array.from(children).filter((child) =>
           child.matches(segment)
         ).length;
       } catch {
@@ -179,23 +212,31 @@ function buildElementSelectorSegment(el: Element, doc: Document): string {
  * Generates a clean, specific, LLM-friendly CSS selector for `el`.
  * Prioritizes unique `#id`, `[data-testid="..."]`, tag + semantic classes,
  * and `:nth-of-type` disambiguation, walking ancestors up to `body`/`documentElement`
- * (with a safety cap) or until the chain is unique in `document`.
+ * (with a safety cap) or until the chain is unique.
+ *
+ * Uniqueness is scoped to the element's own root: a `ShadowRoot` for shadow-DOM
+ * elements (where direct children have no `parentElement`, so traversal stops at
+ * the shadow boundary), otherwise the `Document`. Use `generateShadowHostSelectors`
+ * to cross shadow boundaries.
  * Falls back to the most specific chain when no unique CSS selector exists.
  */
 export function generateCssSelector(el: Element): string {
+  const root = getSelectorRoot(el);
   const doc = el.ownerDocument || document;
 
-  if (el === doc.documentElement) {
-    return 'html';
-  }
-  if (el === doc.body) {
-    return 'body';
+  if (root === doc) {
+    if (el === doc.documentElement) {
+      return 'html';
+    }
+    if (el === doc.body) {
+      return 'body';
+    }
   }
 
   // Immediate check for unique ID
   if (el.id && el.id.trim()) {
     const idSel = `#${escapeCssIdentifier(el.id.trim())}`;
-    if (isUniqueSelector(idSel, doc)) {
+    if (isUniqueSelector(idSel, root)) {
       return idSel;
     }
   }
@@ -206,7 +247,7 @@ export function generateCssSelector(el: Element): string {
     if (val && val.trim()) {
       const escapedVal = val.trim().replace(/"/g, '\\"');
       const testSel = `[${attr}="${escapedVal}"]`;
-      if (isUniqueSelector(testSel, doc)) {
+      if (isUniqueSelector(testSel, root)) {
         return testSel;
       }
     }
@@ -215,20 +256,23 @@ export function generateCssSelector(el: Element): string {
   const parts: string[] = [];
   let current: Element | null = el;
   let depth = 0;
-  // Safety cap only; traversal normally stops at body/documentElement.
+  // Safety cap only; traversal normally stops at body/documentElement or the shadow boundary.
   const maxDepth = 256;
 
-  while (
-    current &&
-    current !== doc.body &&
-    current !== doc.documentElement &&
-    depth < maxDepth
-  ) {
-    const segment = buildElementSelectorSegment(current, doc);
+  while (current && depth < maxDepth) {
+    if (
+      root === doc &&
+      (current === doc.body || current === doc.documentElement)
+    ) {
+      break;
+    }
+
+    // Direct shadow-root children have no parentElement; traversal ends after this segment.
+    const segment = buildElementSelectorSegment(current, root);
     parts.unshift(segment);
 
     const candidate = parts.join(' > ');
-    if (isUniqueSelector(candidate, doc)) {
+    if (isUniqueSelector(candidate, root)) {
       return candidate;
     }
 
@@ -241,6 +285,31 @@ export function generateCssSelector(el: Element): string {
   }
 
   return parts.join(' > ') || el.tagName.toLowerCase();
+}
+
+/**
+ * Builds the CSS selector chain of shadow hosts wrapping `el`.
+ *
+ * Each host selector is generated relative to the host's own root, so it is
+ * unique within the document or enclosing shadow tree. The result is ordered
+ * **outermost -> innermost**, i.e. resolution starts from the document, finds
+ * the outermost host, enters its shadow root, finds the next host, and so on.
+ * Returns an empty array for light-DOM elements.
+ */
+export function generateShadowHostSelectors(el: Element): string[] {
+  const selectors: string[] = [];
+  let rootNode: Node = el.getRootNode();
+
+  while (isShadowRoot(rootNode)) {
+    const host = rootNode.host;
+    if (!host) {
+      break;
+    }
+    selectors.unshift(generateCssSelector(host));
+    rootNode = host.getRootNode();
+  }
+
+  return selectors;
 }
 
 /**
@@ -286,20 +355,18 @@ export function generateXPath(el: Element): string {
 }
 
 /**
- * Finds an `Element` (HTML or SVG) by first trying `root.querySelector(selector)`,
- * then falling back to `root.evaluate(xpath, ...)`.
+ * Resolves an element within a single root (document or shadow root): CSS first,
+ * then XPath fallback.
  *
  * A CSS selector is only trusted when it matches exactly one element; ambiguous
  * (0 or multiple matches) selectors fall through to XPath so deep duplicate
- * structures resolve to the intended element.
- *
- * Avoids `instanceof HTMLElement` so elements from same-origin iframe documents
- * (device preview) resolve correctly across realms.
+ * structures resolve to the intended element. XPath is skipped for shadow roots
+ * because `DocumentFragment`/`ShadowRoot` do not implement `evaluate`.
  */
-export function findElementBySelectorOrXPath(
-  selector: string,
-  xpath?: string,
-  root: Document = document
+function resolveWithinRoot(
+  root: ParentNode,
+  selector?: string,
+  xpath?: string
 ): Element | null {
   if (selector && selector.trim()) {
     try {
@@ -312,9 +379,10 @@ export function findElementBySelectorOrXPath(
     }
   }
 
-  if (xpath && xpath.trim() && typeof root.evaluate === 'function') {
+  const xpathRoot = root as Document;
+  if (xpath && xpath.trim() && typeof xpathRoot.evaluate === 'function') {
     try {
-      const xPathResult = root.evaluate(
+      const xPathResult = xpathRoot.evaluate(
         xpath.trim(),
         root,
         null,
@@ -330,6 +398,122 @@ export function findElementBySelectorOrXPath(
     }
   }
 
+  return null;
+}
+
+/**
+ * Finds an `Element` (HTML or SVG) by first trying `root.querySelector(selector)`,
+ * then falling back to `root.evaluate(xpath, ...)`.
+ *
+ * When `shadowHostSelectors` is provided (ordered outermost -> innermost, as
+ * produced by `extractElementMetadata`), each host selector is resolved within
+ * the previous root, its open `shadowRoot` is entered, and the final
+ * selector/XPath is resolved inside the innermost shadow root. Returns `null`
+ * if a host cannot be found or has no open shadow root.
+ *
+ * The uniqueness/XPath rules above apply within the final root. Avoids
+ * `instanceof HTMLElement` so elements from same-origin iframe documents
+ * (device preview) resolve correctly across realms.
+ */
+export function findElementBySelectorOrXPath(
+  selector: string,
+  xpath?: string,
+  root: SelectorRoot = document,
+  shadowHostSelectors?: string[]
+): Element | null {
+  let currentRoot: ParentNode = root;
+
+  if (shadowHostSelectors && shadowHostSelectors.length > 0) {
+    for (const hostSelector of shadowHostSelectors) {
+      if (!hostSelector || !hostSelector.trim()) {
+        return null;
+      }
+      const host = resolveWithinRoot(currentRoot, hostSelector);
+      const shadowRoot = host?.shadowRoot;
+      if (!host || !shadowRoot) {
+        return null;
+      }
+      currentRoot = shadowRoot;
+    }
+  }
+
+  return resolveWithinRoot(currentRoot, selector, xpath);
+}
+
+/**
+ * Returns `true` when `el` is part of the extension overlay, either directly,
+ * via a light-DOM ancestor, or via any enclosing shadow host chain.
+ */
+function isOverlayElement(el: Element): boolean {
+  if (el.id === SHADOW_HOST_ID) {
+    return true;
+  }
+  if (el.classList && el.classList.contains('dpa-overlay-root')) {
+    return true;
+  }
+
+  let root: Node = el.getRootNode();
+  while (isShadowRoot(root)) {
+    const host = root.host;
+    if (!host) {
+      break;
+    }
+    if (
+      host.id === SHADOW_HOST_ID ||
+      (host.classList && host.classList.contains('dpa-overlay-root')) ||
+      host.closest(`#${SHADOW_HOST_ID}`) !== null ||
+      host.closest('.dpa-overlay-root') !== null
+    ) {
+      return true;
+    }
+    root = host.getRootNode();
+  }
+
+  try {
+    return (
+      el.closest(`#${SHADOW_HOST_ID}`) !== null ||
+      el.closest('.dpa-overlay-root') !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves the page element an event refers to, composed-path aware.
+ *
+ * Returns the deepest `Element` in `event.composedPath()`, which correctly
+ * retargets events that originate inside shadow roots to the inner element
+ * (the raw `event.target` is retargeted to the shadow host). Returns `null`
+ * when the event originates from the extension overlay (`#dpa-root-host` /
+ * `.dpa-overlay-root`), so overlay interactions are never treated as page hits.
+ */
+export function resolveEventElement(event: Event): Element | null {
+  const path =
+    typeof event.composedPath === 'function' ? event.composedPath() : [];
+
+  for (const node of path) {
+    const pathNode = node as Node | null;
+    if (!pathNode || pathNode.nodeType !== 1) {
+      continue;
+    }
+    const el = pathNode as Element;
+    return isOverlayElement(el) ? null : el;
+  }
+
+  const target = event.target as Node | null;
+  if (!target) {
+    return null;
+  }
+  if (target.nodeType === 1) {
+    const el = target as Element;
+    return isOverlayElement(el) ? null : el;
+  }
+  if (target.nodeType === 3 && target.parentElement) {
+    return isOverlayElement(target.parentElement)
+      ? null
+      : target.parentElement;
+  }
   return null;
 }
 
@@ -541,6 +725,8 @@ export function extractElementMetadata(
   maskingConfig?: MaskingConfig,
   forceMaskText = false
 ): ElementMetadata {
+  const shadowHostSelectors = generateShadowHostSelectors(el);
+
   const rawMetadata: ElementMetadata = {
     tagName: el.tagName.toLowerCase(),
     id: el.id || '',
@@ -556,6 +742,7 @@ export function extractElementMetadata(
     rect: extractElementRect(el),
     computedStyles: extractComputedStyles(el),
     framework: requestFrameworkMetadata(el),
+    ...(shadowHostSelectors.length > 0 ? { shadowHostSelectors } : {}),
   };
 
   if (maskingConfig || forceMaskText) {
@@ -572,6 +759,11 @@ export function extractElementMetadata(
 /**
  * Returns the parent `Element` candidate for DOM hierarchy traversal,
  * stopping at `document.body` (never returning `document.body` or `document.documentElement`).
+ *
+ * For a direct child of a `ShadowRoot` (where `parentElement` is `null`), the
+ * shadow host is returned as the parent candidate, unless the host is the
+ * document root, `document.body`, or the extension host. This lets hierarchy
+ * traversal continue from an element inside a shadow tree out into the light DOM.
  */
 export function getParentCandidate(el: Element | null): Element | null {
   if (!el) {
@@ -584,8 +776,24 @@ export function getParentCandidate(el: Element | null): Element | null {
   }
 
   const parent = el.parentElement;
+  if (!parent) {
+    const rootNode = typeof el.getRootNode === 'function' ? el.getRootNode() : null;
+    if (isShadowRoot(rootNode)) {
+      const host: Element | null = rootNode.host ?? null;
+      if (
+        !host ||
+        host === doc.body ||
+        host === doc.documentElement ||
+        host.id === SHADOW_HOST_ID
+      ) {
+        return null;
+      }
+      return host;
+    }
+    return null;
+  }
+
   if (
-    !parent ||
     parent === doc.body ||
     parent === doc.documentElement ||
     parent.id === SHADOW_HOST_ID
@@ -599,26 +807,45 @@ export function getParentCandidate(el: Element | null): Element | null {
 /**
  * Returns the first valid child `Element` candidate for DOM hierarchy traversal,
  * skipping `#dpa-root-host`, `script`, `style`, and non-element nodes.
+ *
+ * If `el` has an open `shadowRoot` with element children, the search descends
+ * into that shadow tree first (skipping the same hosts/tags); light-DOM children
+ * are only considered when the shadow tree yields no candidate.
  */
 export function getFirstChildCandidate(el: Element | null): Element | null {
-  if (!el || !el.children) {
+  if (!el) {
     return null;
   }
 
-  for (let i = 0; i < el.children.length; i++) {
-    const child = el.children[i];
-    if (!child || child.nodeType !== 1) {
-      continue;
+  const findInParent = (parent: ParentNode): Element | null => {
+    const children = parent.children;
+    if (!children) {
+      return null;
     }
-    if (child.id === SHADOW_HOST_ID) {
-      continue;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (!child || child.nodeType !== 1) {
+        continue;
+      }
+      if (child.id === SHADOW_HOST_ID) {
+        continue;
+      }
+      const tag = child.tagName.toLowerCase();
+      if (SKIPPED_CHILD_TAGS.has(tag)) {
+        continue;
+      }
+      return child;
     }
-    const tag = child.tagName.toLowerCase();
-    if (SKIPPED_CHILD_TAGS.has(tag)) {
-      continue;
+    return null;
+  };
+
+  const shadowRoot = el.shadowRoot;
+  if (shadowRoot) {
+    const shadowChild = findInParent(shadowRoot);
+    if (shadowChild) {
+      return shadowChild;
     }
-    return child;
   }
 
-  return null;
+  return findInParent(el);
 }

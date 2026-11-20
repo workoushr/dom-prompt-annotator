@@ -563,6 +563,99 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     expect(OVERLAY_CSS).toContain('max-width: calc(100vw - 24px)');
     expect(OVERLAY_CSS).toContain('@media (max-width: 640px)');
     expect(OVERLAY_CSS).toContain('@media (max-width: 480px)');
+    expect(OVERLAY_CSS).toContain('@media (max-width: 560px)');
+    expect(OVERLAY_CSS).toContain('@media (max-width: 360px)');
+  });
+
+  it('uses a vertical-only animation for flyout menus instead of the drawer slide', () => {
+    expect(OVERLAY_CSS).toContain('@keyframes dpaMenuSlideUp');
+    const deviceMenuBlock = OVERLAY_CSS.match(/\.dpa-device-menu\s*\{[^}]*\}/s)?.[0] || '';
+    const copyMenuBlock = OVERLAY_CSS.match(/\.dpa-copy-menu\s*\{[^}]*\}/s)?.[0] || '';
+    expect(deviceMenuBlock).toContain('animation: dpaMenuSlideUp');
+    expect(copyMenuBlock).toContain('animation: dpaMenuSlideUp');
+    expect(deviceMenuBlock).not.toContain('dpaFadeSlideUp');
+    expect(copyMenuBlock).not.toContain('dpaFadeSlideUp');
+  });
+
+  it('raises visual masks above the device preview backdrop but below the bottom bar', () => {
+    const maskBlock = OVERLAY_CSS.match(/\.dpa-visual-mask\s*\{[^}]*\}/s)?.[0] || '';
+    const zIndex = Number(maskBlock.match(/z-index:\s*(\d+)/)?.[1]);
+    expect(zIndex).toBeGreaterThan(2147483640);
+    expect(zIndex).toBeLessThan(2147483646);
+  });
+
+  it('closes only the open flyout menu on Escape and notifies onMenuOpenChange', async () => {
+    const onToggleInspectMode = vi.fn();
+    const onToggleDrawer = vi.fn();
+    const onMenuOpenChange = vi.fn();
+    await renderComponent({
+      inspectMode: true,
+      onToggleInspectMode,
+      onToggleDrawer,
+      onMenuOpenChange,
+    });
+
+    const deviceBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-device-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      deviceBtn.click();
+    });
+    expect(container.querySelector('[data-testid="dpa-device-menu"]')).not.toBeNull();
+    expect(onMenuOpenChange).toHaveBeenLastCalledWith(true);
+
+    const firstEscape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      window.dispatchEvent(firstEscape);
+    });
+
+    expect(container.querySelector('[data-testid="dpa-device-menu"]')).toBeNull();
+    expect(firstEscape.defaultPrevented).toBe(true);
+    expect(onMenuOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onToggleInspectMode).not.toHaveBeenCalled();
+    expect(onToggleDrawer).not.toHaveBeenCalled();
+
+    // Second Escape must fall through to normal mode behaviour (not intercepted).
+    const secondEscape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      window.dispatchEvent(secondEscape);
+    });
+    expect(secondEscape.defaultPrevented).toBe(false);
+  });
+
+  it('closes the copy format menu on Escape and reports menu state', async () => {
+    const onMenuOpenChange = vi.fn();
+    await renderComponent({ onMenuOpenChange });
+
+    const toggleBtn = container.querySelector(
+      '[data-testid="dpa-copy-format-toggle-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(container.querySelector('[data-testid="dpa-copy-menu"]')).not.toBeNull();
+    expect(onMenuOpenChange).toHaveBeenLastCalledWith(true);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    expect(container.querySelector('[data-testid="dpa-copy-menu"]')).toBeNull();
+    expect(onMenuOpenChange).toHaveBeenLastCalledWith(false);
   });
 
   it('displays active badge and dot, and delegates rotation to onSetDeviceEmulation', async () => {
