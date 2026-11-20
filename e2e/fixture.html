@@ -68,6 +68,27 @@
       background: #fef2f2;
       font-size: 14px;
     }
+    .secret-parent {
+      margin-top: 20px;
+      padding: 12px;
+      border: 1px dashed #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+    }
+    .secret-parent .field {
+      margin-bottom: 8px;
+    }
+    .secret-span {
+      display: block;
+      font-size: 14px;
+      color: #92400e;
+    }
+    .nav-link {
+      display: inline-block;
+      margin: 16px 0 24px;
+      color: #2563eb;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
@@ -79,6 +100,25 @@
     </div>
     <button id="primary-btn" type="button">Save changes</button>
     <p class="secret" data-mask="true">Secret: account token 12345</p>
+    <a id="same-link" class="nav-link" href="/page2.html">Go to page 2</a>
+    <section class="secret-parent">
+      <div class="field">
+        <label for="secret-input">Secret input</label>
+        <input
+          id="secret-input"
+          type="text"
+          value="secret-input-value-9f3a"
+          title="secret-input-title-9f3a"
+          placeholder="secret-input-placeholder-9f3a"
+          aria-label="secret-input-aria-9f3a"
+        />
+      </div>
+      <span
+        id="secret-span"
+        class="secret-span"
+        title="secret-span-title-9f3a"
+      >secret-span-text-9f3a</span>
+    </section>
   </main>
 </body>
 </html>

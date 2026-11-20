@@ -1152,5 +1152,173 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       expect(toast?.textContent).toContain('マーキングをクリアしました');
     });
   });
+
+  describe('Export reconciles live mask-selector ancestors', () => {
+    const SECRET_VALUE = 'super-secret-value-9182';
+    const SECRET_TITLE = 'super-secret-title-9182';
+    const SECRET_PLACEHOLDER = 'super-secret-placeholder-9182';
+    const SECRET_ARIA = 'super-secret-aria-9182';
+    const SPAN_TEXT = 'span-secret-text-9182';
+    const SPAN_TITLE = 'span-secret-title-9182';
+
+    function mountMaskedTree() {
+      const parent = document.createElement('div');
+      parent.id = 'mask-parent';
+      parent.setAttribute('data-mask', 'true');
+
+      const input = document.createElement('input');
+      input.id = 'secret-input';
+      input.type = 'text';
+      input.setAttribute('value', SECRET_VALUE);
+      input.setAttribute('title', SECRET_TITLE);
+      input.setAttribute('placeholder', SECRET_PLACEHOLDER);
+      input.setAttribute('aria-label', SECRET_ARIA);
+
+      const span = document.createElement('span');
+      span.id = 'secret-span';
+      span.textContent = SPAN_TEXT;
+      span.setAttribute('title', SPAN_TITLE);
+
+      parent.append(input, span);
+      document.body.appendChild(parent);
+    }
+
+    function buildMaskedDescendantAnnotations(): AnnotationItem[] {
+      const inputBase = buildAnnotation(
+        1,
+        '#secret-input',
+        '//*[@id="secret-input"]'
+      );
+      const spanBase = buildAnnotation(
+        2,
+        '#secret-span',
+        '//*[@id="secret-span"]'
+      );
+
+      return [
+        {
+          ...inputBase,
+          maskText: false,
+          element: {
+            ...inputBase.element,
+            tagName: 'input',
+            id: 'secret-input',
+            textContent: '',
+            outerHTMLSnippet: `<input id="secret-input" type="text" value="${SECRET_VALUE}" title="${SECRET_TITLE}" placeholder="${SECRET_PLACEHOLDER}" aria-label="${SECRET_ARIA}">`,
+            attributes: {
+              id: 'secret-input',
+              type: 'text',
+              value: SECRET_VALUE,
+              title: SECRET_TITLE,
+              placeholder: SECRET_PLACEHOLDER,
+              'aria-label': SECRET_ARIA,
+            },
+          },
+        },
+        {
+          ...spanBase,
+          maskText: false,
+          element: {
+            ...spanBase.element,
+            tagName: 'span',
+            id: 'secret-span',
+            textContent: SPAN_TEXT,
+            outerHTMLSnippet: `<span id="secret-span" title="${SPAN_TITLE}">${SPAN_TEXT}</span>`,
+            attributes: { id: 'secret-span', title: SPAN_TITLE },
+          },
+        },
+      ];
+    }
+
+    const maskingConfig = {
+      autoMaskPII: false,
+      maskAllText: false,
+      maskSelectors: ['[data-mask="true"]'],
+      maskColor: '#FF00FF',
+      visualMaskEnabled: true,
+    };
+
+    function expectNoSecrets(copiedText: string) {
+      expect(copiedText).toContain('[MASKED]');
+      for (const secret of [
+        SECRET_VALUE,
+        SECRET_TITLE,
+        SECRET_PLACEHOLDER,
+        SECRET_ARIA,
+        SPAN_TEXT,
+        SPAN_TITLE,
+      ]) {
+        expect(copiedText).not.toContain(secret);
+      }
+    }
+
+    it('masks descendants of a mask-selector ancestor in JSON even when maskText was false', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      });
+
+      mountMaskedTree();
+      await saveInspectMode(true);
+      await renderOverlay();
+      await seedMountedState({
+        maskingConfig,
+        annotations: buildMaskedDescendantAnnotations(),
+      });
+
+      const formatToggle = container.querySelector(
+        '[data-testid="dpa-copy-format-toggle-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        formatToggle.click();
+      });
+      const jsonBtn = container.querySelector(
+        '[data-testid="dpa-copy-json-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        jsonBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const copiedText = String(writeText.mock.calls[0]?.[0] ?? '');
+      expectNoSecrets(copiedText);
+      expect(copiedText).toMatch(/"maskText": true/);
+    });
+
+    it('masks descendants of a mask-selector ancestor in Markdown when maskText was false', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      });
+
+      mountMaskedTree();
+      await saveInspectMode(true);
+      await renderOverlay();
+      await seedMountedState({
+        maskingConfig,
+        annotations: buildMaskedDescendantAnnotations(),
+      });
+
+      const copyBtn = container.querySelector(
+        '[data-testid="dpa-bottom-bar-copy-btn"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        copyBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const copiedText = String(writeText.mock.calls[0]?.[0] ?? '');
+      expect(copiedText).toContain('- **Text**: `[MASKED]`');
+      expectNoSecrets(copiedText);
+    });
+  });
 });
 

@@ -134,6 +134,42 @@ function findMaskedElementsInDocument(
   return Array.from(matched);
 }
 
+/**
+ * Reconciles annotations against the active document right before export.
+ * An annotation whose live element (or ancestor) matches a mask selector is
+ * forced to `maskText: true` for the exported copy only; stored state is kept
+ * untouched. This closes the leak where `maskText` was `false` at save time.
+ */
+export function reconcileAnnotationsForExport(
+  annotations: AnnotationItem[],
+  config: MaskingConfig,
+  activeDoc: Document
+): AnnotationItem[] {
+  if (!Array.isArray(annotations) || annotations.length === 0) {
+    return [];
+  }
+
+  const maskSelectors = config?.maskSelectors || [];
+  if (maskSelectors.length === 0) {
+    return annotations;
+  }
+
+  return annotations.map((annotation) => {
+    if (annotation.maskText) {
+      return annotation;
+    }
+    const liveEl = findElementBySelectorOrXPath(
+      annotation.element.selector,
+      annotation.element.xpath,
+      activeDoc
+    );
+    if (liveEl && isElementMatchedByMaskSelectors(liveEl, maskSelectors)) {
+      return { ...annotation, maskText: true };
+    }
+    return annotation;
+  });
+}
+
 export function formatElementTagLabel(
   tagName: string,
   id?: string,
@@ -684,7 +720,17 @@ export const OverlayApp: React.FC = () => {
 
   const handleCopyPrompt = useCallback(
     async (format: 'markdown' | 'json' = 'markdown') => {
-      const payload = buildExportPayload(stateRef.current, {
+      const activeState = stateRef.current;
+      const activeDoc = previewRef.current?.doc ?? document;
+      const exportState: PageAnnotationState = {
+        ...activeState,
+        annotations: reconcileAnnotationsForExport(
+          activeState.annotations,
+          activeState.maskingConfig,
+          activeDoc
+        ),
+      };
+      const payload = buildExportPayload(exportState, {
         url: window.location.href,
         title: document.title,
         viewport: {

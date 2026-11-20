@@ -1,6 +1,6 @@
 import { ExtensionMessage } from '../types/annotation';
 import { saveInspectMode } from '../utils/preferences';
-import { clearPageState, getPageState } from '../utils/storage';
+import { getPageState } from '../utils/storage';
 
 const RESTRICTED_URL_PREFIXES = [
   'chrome://',
@@ -192,23 +192,10 @@ export function registerBackgroundListeners(): void {
     });
   }
 
-  if (chrome.tabs?.onUpdated?.addListener) {
-    chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-      if (changeInfo.status !== 'loading') {
-        return;
-      }
-      // Clear the incoming/current URL key so a reload or navigation never
-      // resurrects annotations from the in-memory session store.
-      const urls = new Set(
-        [changeInfo.url, tab?.url].filter(
-          (url): url is string => Boolean(url) && !isRestrictedTabUrl(url)
-        )
-      );
-      for (const url of urls) {
-        void clearPageState(url);
-      }
-    });
-  }
+  // Note: page state is intentionally NOT cleared from tabs.onUpdated.
+  // Chrome's tabs.onUpdated does not expose frameId, so it also fires for
+  // same-origin iframe preview navigations and would wipe the parent overlay.
+  // The content script clears its own page state on main-document mount.
 
   if (chrome.action?.onClicked?.addListener) {
     chrome.action.onClicked.addListener((tab) => {

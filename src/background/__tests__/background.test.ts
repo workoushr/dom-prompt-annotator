@@ -279,83 +279,33 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(sendResponseForForward).toHaveBeenCalledWith({ scrolled: true });
   });
 
-  it('clears page annotations when a tab starts loading (refresh or navigation)', async () => {
-    const url = 'https://example.com/refresh';
+  it('does not register a tabs.onUpdated listener that clears page state on subframe loads', async () => {
+    const url = 'https://example.com/subframe-preview';
     await savePageState(url, {
-      inspectMode: false,
-      annotations: [
-        {
-          id: 1,
-          instruction: 'Make the CTA larger',
-          maskText: false,
-          createdAt: '2026-11-07T00:00:00.000Z',
-          element: {
-            tagName: 'button',
-            id: 'cta',
-            className: 'cta',
-            selector: '#cta',
-            xpath: '//*[@id="cta"]',
-            attributes: { id: 'cta' },
-            textContent: 'Buy',
-            outerHTMLSnippet: '<button id="cta">Buy</button>',
-            rect: { x: 0, y: 0, width: 10, height: 10 },
-            computedStyles: {},
-            framework: null,
-          },
-        },
-      ],
+      inspectMode: true,
+      globalInstruction: 'Keep header sticky',
     });
 
-    let updatedCallback:
-      | ((
-          tabId: number,
-          changeInfo: chrome.tabs.TabChangeInfo,
-          tab: chrome.tabs.Tab
-        ) => void)
-      | null = null;
+    const onUpdatedAddListener = vi.fn();
 
     (globalThis as Record<string, unknown>).chrome = {
       tabs: {
         onUpdated: {
-          addListener: vi.fn(
-            (
-              cb: (
-                tabId: number,
-                changeInfo: chrome.tabs.TabChangeInfo,
-                tab: chrome.tabs.Tab
-              ) => void
-            ) => {
-              updatedCallback = cb;
-            }
-          ),
+          addListener: onUpdatedAddListener,
         },
       },
     };
 
     registerBackgroundListeners();
-    expect(updatedCallback).not.toBeNull();
 
-    // A completed load must not wipe annotations.
-    updatedCallback!(
-      1,
-      { status: 'complete' },
-      { id: 1, url } as chrome.tabs.Tab
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect((await getPageState(url)).annotations).toHaveLength(1);
+    // Chrome's tabs.onUpdated fires for subframe (iframe preview) loads without
+    // exposing frameId. Clearing page state there would wipe the parent overlay,
+    // so the background must not register such a listener at all.
+    expect(onUpdatedAddListener).not.toHaveBeenCalled();
 
-    updatedCallback!(1, { status: 'loading', url }, {
-      id: 1,
-      url,
-    } as chrome.tabs.Tab);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const afterReload = await getPageState(url);
-    expect(afterReload.annotations).toEqual([]);
-    expect(afterReload.inspectMode).toBe(false);
-    expect(afterReload.isVisible).toBe(false);
+    const state = await getPageState(url);
+    expect(state.globalInstruction).toBe('Keep header sticky');
+    expect(state.inspectMode).toBe(true);
   });
 
   it('grants untrusted contexts access to session storage on ENSURE_STATE_ACCESS', async () => {

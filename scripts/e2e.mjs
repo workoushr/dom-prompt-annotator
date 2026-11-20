@@ -372,6 +372,42 @@ async function main() {
       await deviceReset.waitFor({ state: 'visible' });
     };
 
+    // Closes the device preview regardless of the preview frame's origin so a
+    // failed assertion cannot leave the overlay covering the page.
+    const resetDevicePreview = async () => {
+      if ((await deviceIframe.count()) === 0) {
+        return;
+      }
+      try {
+        await ensureDeviceMenuOpen();
+        await deviceReset.click();
+        await deviceIframe
+          .waitFor({ state: 'hidden', timeout: WAIT })
+          .catch(() => {});
+        await delay(200);
+      } catch {
+        // Best-effort cleanup; the browser context is closed on hard failure.
+      }
+    };
+
+    const findPreviewFrame = async (urlPattern) => {
+      const mainFrame = page.mainFrame();
+      const deadline = Date.now() + WAIT;
+      while (Date.now() < deadline) {
+        const frames = page.frames().filter((candidate) => candidate !== mainFrame);
+        const frame = urlPattern
+          ? frames.find((candidate) => urlPattern.test(candidate.url()))
+          : frames[0];
+        if (frame) return frame;
+        await delay(100);
+      }
+      throw new HarnessError(
+        `Device preview iframe never exposed a matching frame${
+          urlPattern ? ` (pattern: ${urlPattern})` : ''
+        }.`
+      );
+    };
+
     // 1. No persisted preference: no bar, no padding, and normal page clicks work.
     await runCheck('initial load is inactive without a persisted preference', async () => {
       await delay(700);
@@ -503,7 +539,89 @@ async function main() {
       await bar.waitFor({ state: 'visible' });
     });
 
-    // 6. In-page device preview iframe, with the bottom bar pinned in place.
+    // 6. Masking a parent selector after the annotation exists must still mask
+    // the annotated descendant at export time (issue #28).
+    await runCheck('export masks a descendant of a late-added mask selector', async () => {
+      const secrets = [
+        'secret-input-value-9f3a',
+        'secret-input-title-9f3a',
+        'secret-input-placeholder-9f3a',
+        'secret-input-aria-9f3a',
+        'secret-span-text-9f3a',
+        'secret-span-title-9f3a',
+      ];
+
+      // `.secret-parent` is NOT in maskingConfig yet when the child is annotated.
+      await addAnnotation('#secret-input', 'Redact this field');
+      await badge1.waitFor({ state: 'visible' });
+
+      await drawerBtn.click();
+      const privacyTab = page.locator('[data-testid="dpa-drawer-tab-privacy"]');
+      await privacyTab.waitFor({ state: 'visible' });
+      await privacyTab.click();
+
+      const selectorInput = page.locator('[data-testid="dpa-drawer-add-selector-input"]');
+      await selectorInput.fill('.secret-parent');
+      await page.locator('[data-testid="dpa-drawer-add-selector-btn"]').click();
+
+      await page
+        .locator('.dpa-selector-chip', { hasText: '.secret-parent' })
+        .waitFor({ state: 'visible' });
+
+      await page.locator('[data-testid="dpa-drawer-close-btn"]').click();
+      await page
+        .locator('[data-testid="dpa-drawer"]')
+        .waitFor({ state: 'detached', timeout: WAIT })
+        .catch(() => {});
+
+      await page.bringToFront();
+      await page.locator('[data-testid="dpa-copy-format-toggle-btn"]').click();
+      await page.locator('[data-testid="dpa-copy-json-btn"]').click();
+      await waitForClipboardContains('[MASKED]');
+      const clipboard = await readClipboard();
+
+      let payload;
+      try {
+        payload = JSON.parse(clipboard);
+      } catch (error) {
+        throw new HarnessError(
+          `JSON export was not valid JSON: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      assert(
+        Array.isArray(payload.annotations) && payload.annotations.length === 1,
+        `Expected 1 exported annotation, found ${payload.annotations?.length}.`
+      );
+      const exported = JSON.stringify(payload);
+      assert(
+        exported.includes('[MASKED]'),
+        'Exported JSON must contain [MASKED] for a descendant of a mask selector.'
+      );
+      for (const secret of secrets) {
+        assert(
+          !exported.includes(secret),
+          `Exported JSON leaked raw secret string ${JSON.stringify(secret)}.`
+        );
+      }
+
+      const attributes = payload.annotations[0]?.element?.attributes ?? {};
+      for (const key of ['value', 'title', 'placeholder', 'aria-label']) {
+        assert(
+          attributes[key] === '[MASKED]',
+          `Expected exported attribute ${key} to be [MASKED], got ${JSON.stringify(attributes[key])}.`
+        );
+      }
+
+      // Copy clears markings; wait for the badge to disappear.
+      await badge1.waitFor({ state: 'hidden', timeout: COPY_CLEAR_WAIT }).catch(() => {});
+      assert(
+        (await badge1.count()) === 0,
+        'Copy should clear annotations after the masking export.'
+      );
+    });
+
+    // 7. In-page device preview iframe, with the bottom bar pinned in place.
     await runCheck('device preview opens iframe without moving the bar', async () => {
       const barBefore = await bar.boundingBox();
       assert(barBefore, 'Could not measure the bottom bar before opening device preview.');
@@ -543,7 +661,106 @@ async function main() {
       assertBoxClose(barReset, barBefore, 'bottom bar after device reset');
     });
 
-    // 6. No uncaught page errors during the run.
+    // 8. Same-origin subframe navigation must not tear down the parent overlay.
+    await runCheck('preview subframe navigation keeps the parent UI', async () => {
+      const errorsBefore = pageErrors.length;
+      try {
+        await deviceBtn.click();
+        const preset = page.locator('[data-testid="dpa-device-preset-iphone-15-pro"]');
+        await preset.waitFor({ state: 'visible' });
+        await preset.click();
+        await deviceIframe.waitFor({ state: 'visible' });
+        await delay(300);
+
+        // Make the link clickable: inspect mode would intercept page clicks.
+        if ((await readInspectPreference())?.inspectMode !== false) {
+          await page.locator('[data-testid="dpa-bottom-bar-select-btn"]').click();
+          await delay(300);
+        }
+        assert(
+          (await readInspectPreference())?.inspectMode === false,
+          'Inspect mode should be persisted as false before clicking inside the preview.'
+        );
+
+        await findPreviewFrame(/\/fixture\.html(\?|$)/);
+        await page
+          .frameLocator('[data-testid="dpa-device-preview-iframe"]')
+          .locator('#same-link')
+          .click();
+        const previewFrame = await findPreviewFrame(/\/page2\.html$/);
+        await previewFrame.waitForURL(/\/page2\.html$/, { timeout: WAIT });
+        await delay(500);
+
+        assert(await bar.isVisible(), 'Bottom bar disappeared after preview subframe navigation.');
+        assert(
+          (await page.locator('[data-testid="dpa-overlay-root"]').count()) === 1,
+          'Overlay root disappeared after preview subframe navigation.'
+        );
+        assert(
+          (await deviceIframe.count()) === 1,
+          'Device preview iframe was removed after preview subframe navigation.'
+        );
+        assert(
+          pageErrors.length === errorsBefore,
+          `Preview subframe navigation raised page error(s): ${pageErrors
+            .slice(errorsBefore)
+            .map((error) => error.message)
+            .join(' | ')}`
+        );
+      } finally {
+        await resetDevicePreview();
+      }
+    });
+
+    // 9. Cross-origin preview navigation must degrade to the hint, not throw.
+    await runCheck('cross-origin preview navigation shows the hint and keeps the parent UI', async () => {
+      const errorsBefore = pageErrors.length;
+      const serverPort = new URL(serverRef.baseUrl).port;
+      const crossOriginUrl = `http://localhost:${serverPort}/fixture.html`;
+      try {
+        await deviceBtn.click();
+        const preset = page.locator('[data-testid="dpa-device-preset-iphone-15-pro"]');
+        await preset.waitFor({ state: 'visible' });
+        await preset.click();
+        await deviceIframe.waitFor({ state: 'visible' });
+        await delay(300);
+
+        const previewFrame = await findPreviewFrame(/\/fixture\.html(\?|$)/);
+        await previewFrame.evaluate((url) => {
+          window.location.href = url;
+        }, crossOriginUrl);
+        await previewFrame.waitForURL(
+          new RegExp(`localhost:${serverPort}/fixture\\.html`),
+          { timeout: WAIT }
+        );
+
+        const hint = page.locator('[data-testid="dpa-device-preview-hint"]');
+        await hint.waitFor({ state: 'visible', timeout: WAIT });
+        await delay(300);
+
+        assert(await bar.isVisible(), 'Bottom bar disappeared after cross-origin preview navigation.');
+        assert(
+          (await page.locator('[data-testid="dpa-overlay-root"]').count()) === 1,
+          'Overlay root disappeared after cross-origin preview navigation.'
+        );
+        assert(
+          (await deviceIframe.count()) === 1,
+          'Device preview iframe was removed after cross-origin preview navigation.'
+        );
+        assert(await hint.isVisible(), 'Cross-origin preview hint is not visible.');
+        assert(
+          pageErrors.length === errorsBefore,
+          `Cross-origin preview navigation raised page error(s): ${pageErrors
+            .slice(errorsBefore)
+            .map((error) => error.message)
+            .join(' | ')}`
+        );
+      } finally {
+        await resetDevicePreview();
+      }
+    });
+
+    // 10. No uncaught page errors during the run.
     await runCheck('no uncaught page errors', async () => {
       await delay(100);
       if (pageErrors.length > 0) {

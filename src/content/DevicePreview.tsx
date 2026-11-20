@@ -157,12 +157,42 @@ export const DevicePreview: React.FC<DevicePreviewProps> = ({
       return;
     }
     const handleChange = () => setMetricsTick((tick) => tick + 1);
-    previewDoc.addEventListener('scroll', handleChange, true);
-    const view = previewDoc.defaultView;
-    view?.addEventListener('resize', handleChange);
+    // The preview may navigate cross-origin at any time (e.g. the user clicks a
+    // link inside the iframe). Once that happens, the captured document and its
+    // WindowProxy become inaccessible and every listener call can throw a
+    // SecurityError, so all access is guarded.
+    let view: Window | null = null;
+    let scrollAttached = false;
+    let resizeAttached = false;
+    try {
+      previewDoc.addEventListener('scroll', handleChange, true);
+      scrollAttached = true;
+    } catch {
+      scrollAttached = false;
+    }
+    try {
+      view = previewDoc.defaultView;
+      view?.addEventListener('resize', handleChange);
+      resizeAttached = view !== null;
+    } catch {
+      view = null;
+      resizeAttached = false;
+    }
     return () => {
-      previewDoc.removeEventListener('scroll', handleChange, true);
-      view?.removeEventListener('resize', handleChange);
+      if (scrollAttached) {
+        try {
+          previewDoc.removeEventListener('scroll', handleChange, true);
+        } catch {
+          // Document became cross-origin; nothing to detach.
+        }
+      }
+      if (resizeAttached && view) {
+        try {
+          view.removeEventListener('resize', handleChange);
+        } catch {
+          // WindowProxy became cross-origin; nothing to detach.
+        }
+      }
     };
   }, [previewDoc]);
 
