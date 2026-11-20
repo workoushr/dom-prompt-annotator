@@ -80,6 +80,22 @@ describe('DOM Metadata Extractor (domExtractor.ts)', () => {
         globalThis.CSS = originalCss;
       }
     });
+
+    it('produces a unique selector for deep duplicate structures beyond the former 4-level cap', () => {
+      document.body.innerHTML = `
+        <div class="w1"><div class="w2"><div class="w3"><div class="w4"><div class="dup">Deep A</div></div></div></div></div>
+        <div class="w1"><div class="w2"><div class="w3"><div class="w4"><div class="dup">Deep B</div></div></div></div></div>
+      `;
+
+      const deepB = Array.from(document.querySelectorAll('.dup')).find(
+        (el) => el.textContent === 'Deep B'
+      ) as HTMLElement;
+      expect(deepB).toBeTruthy();
+
+      const selector = generateCssSelector(deepB);
+      expect(document.querySelectorAll(selector).length).toBe(1);
+      expect(document.querySelector(selector)).toBe(deepB);
+    });
   });
 
   describe('generateXPath & findElementBySelectorOrXPath', () => {
@@ -112,6 +128,23 @@ describe('DOM Metadata Extractor (domExtractor.ts)', () => {
       expect(
         findElementBySelectorOrXPath('#non-existent-id', xpath, document)
       ).toBe(secondLi);
+    });
+
+    it('falls back to XPath when the CSS selector matches multiple deep duplicate elements', () => {
+      document.body.innerHTML = `
+        <div class="w1"><div class="w2"><div class="w3"><div class="w4"><div class="dup">Deep A</div></div></div></div></div>
+        <div class="w1"><div class="w2"><div class="w3"><div class="w4"><div class="dup">Deep B</div></div></div></div></div>
+      `;
+
+      const deepB = Array.from(document.querySelectorAll('.dup')).find(
+        (el) => el.textContent === 'Deep B'
+      ) as HTMLElement;
+      expect(deepB).toBeTruthy();
+      expect(document.querySelectorAll('.dup').length).toBe(2);
+
+      expect(
+        findElementBySelectorOrXPath('.dup', generateXPath(deepB), document)
+      ).toBe(deepB);
     });
   });
 

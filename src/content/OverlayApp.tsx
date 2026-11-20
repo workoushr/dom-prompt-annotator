@@ -31,6 +31,7 @@ import {
   normalizeUrlKey,
   savePageState,
 } from '../utils/storage';
+import { loadUiPreferences, saveInspectMode } from '../utils/preferences';
 import {
   extractElementMetadata,
   findElementBySelectorOrXPath,
@@ -133,6 +134,42 @@ function findMaskedElementsInDocument(
   return Array.from(matched);
 }
 
+/**
+ * Reconciles annotations against the active document right before export.
+ * An annotation whose live element (or ancestor) matches a mask selector is
+ * forced to `maskText: true` for the exported copy only; stored state is kept
+ * untouched. This closes the leak where `maskText` was `false` at save time.
+ */
+export function reconcileAnnotationsForExport(
+  annotations: AnnotationItem[],
+  config: MaskingConfig,
+  activeDoc: Document
+): AnnotationItem[] {
+  if (!Array.isArray(annotations) || annotations.length === 0) {
+    return [];
+  }
+
+  const maskSelectors = config?.maskSelectors || [];
+  if (maskSelectors.length === 0) {
+    return annotations;
+  }
+
+  return annotations.map((annotation) => {
+    if (annotation.maskText) {
+      return annotation;
+    }
+    const liveEl = findElementBySelectorOrXPath(
+      annotation.element.selector,
+      annotation.element.xpath,
+      activeDoc
+    );
+    if (liveEl && isElementMatchedByMaskSelectors(liveEl, maskSelectors)) {
+      return { ...annotation, maskText: true };
+    }
+    return annotation;
+  });
+}
+
 export function formatElementTagLabel(
   tagName: string,
   id?: string,
@@ -183,7 +220,7 @@ function safeBroadcastPageState(state: PageAnnotationState): void {
       const maybePromise = chrome.runtime.sendMessage(msg);
       if (maybePromise && typeof maybePromise.catch === 'function') {
         maybePromise.catch(() => {
-          // Ignore when SidePanel or background is not listening
+          // Ignore when no extension page is listening
         });
       }
     }
@@ -326,11 +363,20 @@ export const OverlayApp: React.FC = () => {
   );
 
   // Page state is ephemeral: never restore markings after a reload/navigation.
+  // The inspect preference is the only disk-persisted UI state, and it decides
+  // whether the bar is rendered at all on this page.
   useEffect(() => {
     let mounted = true;
     const url = window.location.href;
 
     const load = async () => {
+      let prefInspectMode = false;
+      try {
+        const preferences = await loadUiPreferences();
+        prefInspectMode = preferences.inspectMode;
+      } catch {
+        // Defaults to inactive when preferences cannot be read.
+      }
       try {
         await clearPageState(url);
       } catch {
@@ -338,8 +384,18 @@ export const OverlayApp: React.FC = () => {
       }
       const loaded = await getPageState(url);
       if (mounted) {
-        setState(loaded);
-        safeBroadcastPageState(loaded);
+        // Keep session page state aligned with the preference so later
+        // annotation patches do not resurrect the default hidden visibility.
+        const nextState = await savePageState(url, {
+          ...loaded,
+          inspectMode: prefInspectMode,
+          isVisible: prefInspectMode,
+        });
+        if (!mounted) {
+          return;
+        }
+        setState(nextState);
+        safeBroadcastPageState(nextState);
       }
     };
 
@@ -438,8 +494,11 @@ export const OverlayApp: React.FC = () => {
       setHoveredInfo(null);
       setPopover(null);
     }
+    await saveInspectMode(nextInspect);
     await updateAndPersistState({
       inspectMode: nextInspect,
+      // Toggling OFF keeps the bar visible for the current page only; the
+      // persisted preference decides whether it returns after navigation.
       isVisible: true,
     });
   }, [updateAndPersistState]);
@@ -448,6 +507,7 @@ export const OverlayApp: React.FC = () => {
     setHoveredInfo(null);
     setPopover(null);
     setIsDrawerOpen(false);
+    await saveInspectMode(false);
     await updateAndPersistState({
       isVisible: false,
       inspectMode: false,
@@ -660,7 +720,17 @@ export const OverlayApp: React.FC = () => {
 
   const handleCopyPrompt = useCallback(
     async (format: 'markdown' | 'json' = 'markdown') => {
-      const payload = buildExportPayload(stateRef.current, {
+      const activeState = stateRef.current;
+      const activeDoc = previewRef.current?.doc ?? document;
+      const exportState: PageAnnotationState = {
+        ...activeState,
+        annotations: reconcileAnnotationsForExport(
+          activeState.annotations,
+          activeState.maskingConfig,
+          activeDoc
+        ),
+      };
+      const payload = buildExportPayload(exportState, {
         url: window.location.href,
         title: document.title,
         viewport: {
@@ -914,7 +984,9 @@ export const OverlayApp: React.FC = () => {
         event.preventDefault();
         event.stopPropagation();
         if (!stateRef.current.isVisible) {
-          void updateAndPersistState({ isVisible: true, inspectMode: true });
+          void saveInspectMode(true).then(() =>
+            updateAndPersistState({ isVisible: true, inspectMode: true })
+          );
         } else {
           void handleToggleInspectMode();
         }
@@ -955,7 +1027,7 @@ export const OverlayApp: React.FC = () => {
         }
         if (stateRef.current.inspectMode) {
           setHoveredInfo(null);
-          void updateAndPersistState({ inspectMode: false });
+          void handleToggleInspectMode();
           return;
         }
         void handleCloseOverlay();
@@ -1088,7 +1160,9 @@ export const OverlayApp: React.FC = () => {
           if (message.enabled) {
             patch.isVisible = true;
           }
-          void savePageState(message.url || currentUrl, patch).then((updated) => {
+          void saveInspectMode(message.enabled).then(() =>
+            savePageState(message.url || currentUrl, patch)
+          ).then((updated) => {
             setState(updated);
             if (!message.enabled) {
               setPopover(null);
@@ -1096,49 +1170,6 @@ export const OverlayApp: React.FC = () => {
             } else {
               setIsMinimized(false);
             }
-            sendResponse(updated);
-          });
-          return true;
-        }
-
-        case 'TOGGLE_OVERLAY': {
-          const nextVisible =
-            typeof message.visible === 'boolean'
-              ? message.visible
-              : !stateRef.current.isVisible;
-          const patch: Parameters<typeof savePageState>[1] = {
-            isVisible: nextVisible,
-          };
-          if (!nextVisible) {
-            patch.inspectMode = false;
-            setPopover(null);
-            setHoveredInfo(null);
-            setIsDrawerOpen(false);
-          } else {
-            patch.inspectMode = true;
-            setIsMinimized(false);
-          }
-          void savePageState(message.url || currentUrl, patch).then((updated) => {
-            setState(updated);
-            sendResponse(updated);
-          });
-          return true;
-        }
-
-        case 'SET_OVERLAY_VISIBLE': {
-          const patch: Parameters<typeof savePageState>[1] = {
-            isVisible: message.visible,
-          };
-          if (!message.visible) {
-            patch.inspectMode = false;
-            setPopover(null);
-            setHoveredInfo(null);
-            setIsDrawerOpen(false);
-          } else {
-            setIsMinimized(false);
-          }
-          void savePageState(message.url || currentUrl, patch).then((updated) => {
-            setState(updated);
             sendResponse(updated);
           });
           return true;

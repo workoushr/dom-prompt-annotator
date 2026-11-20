@@ -178,7 +178,9 @@ function buildElementSelectorSegment(el: Element, doc: Document): string {
 /**
  * Generates a clean, specific, LLM-friendly CSS selector for `el`.
  * Prioritizes unique `#id`, `[data-testid="..."]`, tag + semantic classes,
- * and `:nth-of-type` disambiguation, up to 4 levels deep or until unique in `document`.
+ * and `:nth-of-type` disambiguation, walking ancestors up to `body`/`documentElement`
+ * (with a safety cap) or until the chain is unique in `document`.
+ * Falls back to the most specific chain when no unique CSS selector exists.
  */
 export function generateCssSelector(el: Element): string {
   const doc = el.ownerDocument || document;
@@ -213,7 +215,8 @@ export function generateCssSelector(el: Element): string {
   const parts: string[] = [];
   let current: Element | null = el;
   let depth = 0;
-  const maxDepth = 4;
+  // Safety cap only; traversal normally stops at body/documentElement.
+  const maxDepth = 256;
 
   while (
     current &&
@@ -286,6 +289,10 @@ export function generateXPath(el: Element): string {
  * Finds an `Element` (HTML or SVG) by first trying `root.querySelector(selector)`,
  * then falling back to `root.evaluate(xpath, ...)`.
  *
+ * A CSS selector is only trusted when it matches exactly one element; ambiguous
+ * (0 or multiple matches) selectors fall through to XPath so deep duplicate
+ * structures resolve to the intended element.
+ *
  * Avoids `instanceof HTMLElement` so elements from same-origin iframe documents
  * (device preview) resolve correctly across realms.
  */
@@ -296,9 +303,9 @@ export function findElementBySelectorOrXPath(
 ): Element | null {
   if (selector && selector.trim()) {
     try {
-      const found = root.querySelector(selector.trim());
-      if (found) {
-        return found;
+      const matches = root.querySelectorAll(selector.trim());
+      if (matches.length === 1) {
+        return matches[0]!;
       }
     } catch {
       // Ignore invalid CSS selector and try XPath fallback

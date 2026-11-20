@@ -286,10 +286,17 @@ export const OVERLAY_CSS = `
   .dpa-btn-device {
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.08);
+    /* Idle width = active device (176) + gap (2) + rotate (28) so the bar width never shifts */
+    width: 206px;
+    max-width: 206px;
+    min-width: 206px;
+    justify-content: flex-start;
+  }
+
+  .dpa-device-selector-wrap--active .dpa-btn-device {
     width: 176px;
     max-width: 176px;
     min-width: 176px;
-    justify-content: flex-start;
   }
 
   .dpa-btn-device--active {
@@ -336,11 +343,6 @@ export const OVERLAY_CSS = `
     justify-content: center;
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.08);
-  }
-
-  .dpa-btn-rotate--idle {
-    opacity: 0;
-    pointer-events: none;
   }
 
   .dpa-device-menu {
@@ -453,14 +455,6 @@ export const OVERLAY_CSS = `
     background: #0082e6;
   }
 
-  .dpa-btn-copy--success {
-    background: #059669;
-  }
-
-  .dpa-btn-copy--success:hover {
-    background: #047857;
-  }
-
   .dpa-btn-copy-format-toggle {
     background: #0d99ff;
     color: #ffffff;
@@ -474,6 +468,17 @@ export const OVERLAY_CSS = `
 
   .dpa-btn-copy-format-toggle:hover {
     background: #0082e6;
+  }
+
+  /* Success state covers the whole split button (main + format chevron) */
+  .dpa-copy-btn-wrap--success .dpa-btn-copy,
+  .dpa-copy-btn-wrap--success .dpa-btn-copy-format-toggle {
+    background: #059669;
+  }
+
+  .dpa-copy-btn-wrap--success .dpa-btn-copy:hover,
+  .dpa-copy-btn-wrap--success .dpa-btn-copy-format-toggle:hover {
+    background: #047857;
   }
 
   .dpa-copy-menu {
@@ -526,6 +531,11 @@ export const OVERLAY_CSS = `
       font-size: 11.5px;
     }
     .dpa-btn-device {
+      width: 170px;
+      max-width: 170px;
+      min-width: 170px;
+    }
+    .dpa-device-selector-wrap--active .dpa-btn-device {
       width: 140px;
       max-width: 140px;
       min-width: 140px;
@@ -546,6 +556,11 @@ export const OVERLAY_CSS = `
       font-size: 11px;
     }
     .dpa-btn-device {
+      width: 136px;
+      max-width: 136px;
+      min-width: 136px;
+    }
+    .dpa-device-selector-wrap--active .dpa-btn-device {
       width: 110px;
       max-width: 110px;
       min-width: 110px;
@@ -578,6 +593,11 @@ export const OVERLAY_CSS = `
       font-size: 10px;
     }
     .dpa-btn-device {
+      width: 106px;
+      max-width: 106px;
+      min-width: 106px;
+    }
+    .dpa-device-selector-wrap--active .dpa-btn-device {
       width: 80px;
       max-width: 80px;
       min-width: 80px;

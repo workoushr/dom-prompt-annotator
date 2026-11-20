@@ -2,8 +2,15 @@ import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OverlayApp } from '../content/OverlayApp';
-import { SidePanelApp } from '../sidepanel/SidePanelApp';
-import { getPageState, resetMemoryStoreForTests, savePageState } from '../utils/storage';
+import {
+  getPageState,
+  resetMemoryStoreForTests,
+  savePageState,
+} from '../utils/storage';
+import {
+  resetUiPreferencesForTests,
+  saveInspectMode,
+} from '../utils/preferences';
 import { SHADOW_HOST_ID } from '../utils/masker';
 import { ExportPayload, ExtensionMessage } from '../types/annotation';
 
@@ -16,19 +23,18 @@ type RuntimeMessageListener = (
   sendResponse: (response?: unknown) => void
 ) => boolean | void;
 
-describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () => {
+describe('End-to-End Integration: In-Page Bottom Bar User Journey', () => {
   let hostPageContainer: HTMLElement;
   let extensionHostContainer: HTMLDivElement;
   let overlayMount: HTMLDivElement;
-  let sidePanelMount: HTMLDivElement;
   let overlayRoot: Root | null = null;
-  let sidePanelRoot: Root | null = null;
   let messageListeners: Set<RuntimeMessageListener>;
   let clipboardText = '';
   let writeTextMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     resetMemoryStoreForTests();
+    resetUiPreferencesForTests();
     document.body.innerHTML = '';
     document.head.innerHTML = '';
     document.title = 'CloudMetrics SaaS Dashboard';
@@ -50,7 +56,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
           listener(msg, {} as chrome.runtime.MessageSender, sendResponse);
         }
 
-        // Resolve on microtask if no listener handled synchronously/asynchronously
         Promise.resolve().then(() => {
           if (!responded) {
             resolve(undefined);
@@ -179,7 +184,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
       },
     };
 
-    // Mock bounding client rects for realistic coordinates
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       function (this: HTMLElement) {
         if (this.id === 'upgrade-cta-btn') {
@@ -222,7 +226,7 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
       }
     );
 
-    // 2. Mount both OverlayApp and SidePanelApp inside #dpa-root-host so extension UI events are isolated from host DOM
+    // 2. Mount the OverlayApp inside #dpa-root-host so extension UI events are isolated from host DOM
     extensionHostContainer = document.createElement('div');
     extensionHostContainer.id = SHADOW_HOST_ID;
     document.body.appendChild(extensionHostContainer);
@@ -230,10 +234,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     overlayMount = document.createElement('div');
     overlayMount.id = 'overlay-mount';
     extensionHostContainer.appendChild(overlayMount);
-
-    sidePanelMount = document.createElement('div');
-    sidePanelMount.id = 'sidepanel-mount';
-    extensionHostContainer.appendChild(sidePanelMount);
   });
 
   afterEach(async () => {
@@ -242,12 +242,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
         overlayRoot?.unmount();
       });
       overlayRoot = null;
-    }
-    if (sidePanelRoot) {
-      await act(async () => {
-        sidePanelRoot?.unmount();
-      });
-      sidePanelRoot = null;
     }
     document.body.innerHTML = '';
     vi.restoreAllMocks();
@@ -280,27 +274,59 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     });
   }
 
-  it('completes the full user journey: Inspect Mode -> Parent traversal -> React metadata -> Playwright & PII masking -> Markdown & JSON clipboard export', async () => {
+  async function renderOverlay() {
     overlayRoot = createRoot(overlayMount);
-    sidePanelRoot = createRoot(sidePanelMount);
-
     await act(async () => {
       overlayRoot!.render(<OverlayApp />);
-      sidePanelRoot!.render(<SidePanelApp />);
+    });
+    await flushAsync();
+    await flushAsync();
+  }
+
+  async function annotate(selector: string, instruction: string, stepUp = false) {
+    const el = document.querySelector(selector) as HTMLElement;
+    await act(async () => {
+      el.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true })
+      );
     });
     await flushAsync();
 
-    // =========================================================================
-    // Step 1: Inspect Mode is enabled by default
-    // =========================================================================
-    const inspectToggleBtn = sidePanelMount.querySelector(
-      '[data-testid="toggle-inspect-mode"]'
-    ) as HTMLButtonElement;
-    expect(inspectToggleBtn).not.toBeNull();
-    expect(inspectToggleBtn.textContent).toContain('選択モード (Inspect ON)');
+    if (stepUp) {
+      const parentBtn = overlayMount.querySelector(
+        '[data-testid="dpa-btn-parent"]'
+      ) as HTMLButtonElement;
+      await act(async () => {
+        parentBtn.click();
+      });
+      await flushAsync();
+    }
 
+    const textarea = overlayMount.querySelector(
+      '[data-testid="dpa-textarea-instruction"]'
+    ) as HTMLTextAreaElement;
+    const saveBtn = overlayMount.querySelector(
+      '[data-testid="dpa-btn-save"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      setInputValue(textarea, instruction);
+    });
+    await act(async () => {
+      saveBtn.click();
+    });
+    await flushAsync();
+  }
+
+  it('completes the full user journey: Inspect Mode -> Parent traversal -> React metadata -> Playwright & PII masking -> Markdown & JSON clipboard export', async () => {
+    await saveInspectMode(true);
+    await renderOverlay();
+
+    // =========================================================================
+    // Step 1: Inspect Mode is enabled from the persisted preference
+    // =========================================================================
     const modePill = overlayMount.querySelector('[data-testid="dpa-mode-pill"]');
     expect(modePill?.textContent).toContain('選択中');
+    expect(overlayMount.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
 
     // =========================================================================
     // Step 2: Click inner <span> -> Popover opens -> Step up to parent <button> -> Enter instruction -> Save
@@ -316,13 +342,11 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     const popover = overlayMount.querySelector('[data-testid="dpa-popover"]');
     expect(popover).not.toBeNull();
 
-    // Initially targets the clicked inner <span>
     const popoverSelector = overlayMount.querySelector(
       '[data-testid="dpa-popover-selector"]'
     );
     expect(popoverSelector?.textContent).toBe('#upgrade-cta-inner-text');
 
-    // Click `↑ 親要素 (Parent)` to step up to the parent <button id="upgrade-cta-btn">
     const parentBtn = overlayMount.querySelector(
       '[data-testid="dpa-btn-parent"]'
     ) as HTMLButtonElement;
@@ -337,13 +361,11 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     const popoverTag = overlayMount.querySelector('[data-testid="dpa-popover-tag"]');
     expect(popoverTag?.textContent).toContain('button#upgrade-cta-btn');
 
-    // Verify React component badge is shown in the Popover
     const popoverFw = overlayMount.querySelector(
       '[data-testid="dpa-popover-framework"]'
     );
     expect(popoverFw?.textContent).toContain('HeroPricingCard');
 
-    // Enter instruction for #1 and save
     const popoverTextarea = overlayMount.querySelector(
       '[data-testid="dpa-textarea-instruction"]'
     ) as HTMLTextAreaElement;
@@ -363,92 +385,57 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     await flushAsync();
 
     // =========================================================================
-    // Step 3: Verify #1 badge on page AND #1 card in SidePanelApp with React metadata
+    // Step 3: Verify badges on page and metadata cards in the in-page drawer
     // =========================================================================
     const badge1 = overlayMount.querySelector('[data-testid="dpa-badge-1"]');
     expect(badge1).not.toBeNull();
     expect(badge1?.textContent).toBe('#1');
 
-    const card1 = sidePanelMount.querySelector('[data-testid="annotation-card-1"]');
+    // Annotate the parent `#pricing-card` (contains PII, password input, [data-mask="true"], .customer-name)
+    await annotate('#pricing-card', 'カード全体の余白と角丸を調整');
+    await annotate('#customer-badge', '顧客名バッジのフォントウェイトを太くする');
+
+    expect(overlayMount.querySelector('[data-testid="dpa-badge-3"]')).not.toBeNull();
+
+    const drawerBtn = overlayMount.querySelector(
+      '[data-testid="dpa-bottom-bar-drawer-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      drawerBtn.click();
+    });
+    await flushAsync();
+
+    const card1 = overlayMount.querySelector('[data-testid="annotation-card-1"]');
     expect(card1).not.toBeNull();
-
-    const card1Fw = sidePanelMount.querySelector(
-      '[data-testid="annotation-framework-1"]'
+    expect(card1?.textContent).toContain('HeroPricingCard');
+    expect(card1?.textContent).toContain(
+      'src/components/HeroPricingCard.tsx:42:8'
     );
-    expect(card1Fw?.textContent).toContain('HeroPricingCard');
-    expect(card1Fw?.textContent).toContain(
-      'src/components/HeroPricingCard.tsx:42'
-    );
-
-    // Also annotate the parent `#pricing-card` (which contains PII, password input, [data-mask="true"], and .customer-name)
-    // so that we can verify comprehensive masking across outerHTMLSnippet, textContent, and attributes!
-    const pricingCard = document.getElementById('pricing-card') as HTMLElement;
-    await act(async () => {
-      pricingCard.dispatchEvent(
-        new MouseEvent('click', { bubbles: true, cancelable: true })
-      );
-    });
-    await flushAsync();
-
-    const popoverTextarea2 = overlayMount.querySelector(
-      '[data-testid="dpa-textarea-instruction"]'
-    ) as HTMLTextAreaElement;
-    const popoverSaveBtn2 = overlayMount.querySelector(
-      '[data-testid="dpa-btn-save"]'
-    ) as HTMLButtonElement;
-
-    await act(async () => {
-      setInputValue(popoverTextarea2, 'カード全体の余白と角丸を調整');
-    });
-    await act(async () => {
-      popoverSaveBtn2.click();
-    });
-    await flushAsync();
-
-    // Also annotate `.customer-name` directly as #3
-    const customerBadge = document.getElementById('customer-badge') as HTMLElement;
-    await act(async () => {
-      customerBadge.dispatchEvent(
-        new MouseEvent('click', { bubbles: true, cancelable: true })
-      );
-    });
-    await flushAsync();
-
-    const popoverTextarea3 = overlayMount.querySelector(
-      '[data-testid="dpa-textarea-instruction"]'
-    ) as HTMLTextAreaElement;
-    const popoverSaveBtn3 = overlayMount.querySelector(
-      '[data-testid="dpa-btn-save"]'
-    ) as HTMLButtonElement;
-
-    await act(async () => {
-      setInputValue(popoverTextarea3, '顧客名バッジのフォントウェイトを太くする');
-    });
-    await act(async () => {
-      popoverSaveBtn3.click();
-    });
-    await flushAsync();
-
     expect(
-      sidePanelMount.querySelector('[data-testid="annotation-count-badge"]')
+      overlayMount.querySelector('[data-testid="annotation-card-3"]')
+    ).not.toBeNull();
+    expect(
+      overlayMount.querySelector('[data-testid="dpa-drawer-content-annotations"]')
         ?.textContent
-    ).toBe('3 件の指示');
+    ).toContain('登録済み: 3 件');
 
     // =========================================================================
-    // Step 4: Add custom Playwright mask selector `.customer-name` in SidePanelApp,
-    // enter global instruction (`全体的にモダンな配色に修正`), and copy to clipboard
+    // Step 4: Add custom Playwright mask selector `.customer-name` in the drawer,
+    // enter global instruction, and verify visual masks
     // =========================================================================
-    // Before adding `.customer-name` to maskSelectors, #3 text preview shows "山田 太郎"
-    const textPreview3 = sidePanelMount.querySelector(
-      '[data-testid="annotation-text-preview-3"]'
-    );
-    expect(textPreview3?.textContent).toBe('山田 太郎');
+    const privacyTab = overlayMount.querySelector(
+      '[data-testid="dpa-drawer-tab-privacy"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      privacyTab.click();
+    });
+    await flushAsync();
 
-    const addSelectorInput = sidePanelMount.querySelector(
-      '[data-testid="add-mask-selector-input"]'
+    const addSelectorInput = overlayMount.querySelector(
+      '[data-testid="dpa-drawer-add-selector-input"]'
     ) as HTMLInputElement;
-    const addSelectorBtn = sidePanelMount.querySelector(
-      '[data-testid="add-mask-selector-btn"]'
+    const addSelectorBtn = overlayMount.querySelector(
+      '[data-testid="dpa-drawer-add-selector-btn"]'
     ) as HTMLButtonElement;
 
     await act(async () => {
@@ -459,15 +446,11 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     });
     await flushAsync();
 
-    // Verify `.customer-name` chip was added and #3 text preview is now `[MASKED]`
     expect(
-      sidePanelMount.querySelector(
-        '[data-testid="mask-selector-chip-.customer-name"]'
-      )
-    ).not.toBeNull();
-    expect(textPreview3?.textContent).toBe('[MASKED]');
+      overlayMount.querySelector('[data-testid="dpa-selector-chip-2"]')
+        ?.textContent
+    ).toContain('.customer-name');
 
-    // Verify visual mask overlays on page include password input, [data-mask="true"], and .customer-name
     const visualMasks = overlayMount.querySelectorAll(
       '[data-testid="dpa-visual-mask"]'
     );
@@ -478,21 +461,30 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(visualMaskSelectors).toContain('#secret-project-box');
     expect(visualMaskSelectors).toContain('#customer-badge');
 
-    // Enter global instruction
-    const globalInstructionInput = sidePanelMount.querySelector(
-      '[data-testid="global-instruction-input"]'
+    const contextTab = overlayMount.querySelector(
+      '[data-testid="dpa-drawer-tab-context"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      contextTab.click();
+    });
+    await flushAsync();
+
+    const globalInstructionInput = overlayMount.querySelector(
+      '[data-testid="dpa-drawer-global-instruction"]'
     ) as HTMLTextAreaElement;
     await act(async () => {
       setInputValue(globalInstructionInput, '全体的にモダンな配色に修正');
     });
     await flushAsync();
 
-    // Click "クリップボードにコピー" in Markdown mode
+    // =========================================================================
+    // Step 5: Copy Markdown from the bottom bar and verify masking + clearing
+    // =========================================================================
     const annotationsBeforeCopy = (
       await getPageState(window.location.href)
     ).annotations;
-    const copyBtn = sidePanelMount.querySelector(
-      '[data-testid="copy-export-btn"]'
+    const copyBtn = overlayMount.querySelector(
+      '[data-testid="dpa-bottom-bar-copy-btn"]'
     ) as HTMLButtonElement;
     await act(async () => {
       copyBtn.click();
@@ -502,10 +494,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(writeTextMock).toHaveBeenCalledTimes(1);
     const markdownExport = clipboardText;
 
-    // =========================================================================
-    // Step 5: Inspect Markdown & JSON clipboard outputs
-    // =========================================================================
-    // Verify Markdown structure & global instruction
     expect(markdownExport).toContain(
       '# フロントエンド修正指示 (DOM Prompt Annotator)'
     );
@@ -518,7 +506,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
       'CTAボタンをグラデーション背景にし、ホバー時のアニメーションを追加'
     );
 
-    // Verify no raw PII or masked element text leaks in the Markdown export
     expect(markdownExport).not.toContain('user@example.com');
     expect(markdownExport).not.toContain('090-1234-5678');
     expect(markdownExport).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
@@ -526,19 +513,19 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(markdownExport).not.toContain('機密プロジェクト名');
     expect(markdownExport).not.toContain('山田 太郎');
 
-    // Verify expected masked placeholders are present
     expect(markdownExport).toContain('[MASKED_EMAIL]');
     expect(markdownExport).toContain('[MASKED_PHONE]');
     expect(markdownExport).toContain('[MASKED_TOKEN]');
     expect(markdownExport).toContain('[MASKED]');
 
-    // Copy now clears markings; verify that ephemeral behavior, then restore
-    // the annotations to inspect the JSON payload shape.
     expect(overlayMount.querySelector('[data-testid="dpa-badge-1"]')).toBeNull();
     expect(
       (await getPageState(window.location.href)).annotations
     ).toHaveLength(0);
 
+    // =========================================================================
+    // Step 6: Restore annotations and export the JSON payload shape
+    // =========================================================================
     const restored = await savePageState(window.location.href, {
       annotations: annotationsBeforeCopy,
     });
@@ -555,15 +542,17 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     });
     await flushAsync();
 
-    // Now switch to pure JSON mode and copy again
-    const jsonFormatBtn = sidePanelMount.querySelector(
-      '[data-testid="format-select-json"]'
+    const formatToggleBtn = overlayMount.querySelector(
+      '[data-testid="dpa-copy-format-toggle-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      formatToggleBtn.click();
+    });
+    const jsonFormatBtn = overlayMount.querySelector(
+      '[data-testid="dpa-copy-json-btn"]'
     ) as HTMLButtonElement;
     await act(async () => {
       jsonFormatBtn.click();
-    });
-    await act(async () => {
-      copyBtn.click();
     });
     await flushAsync();
 
@@ -581,7 +570,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     ]);
     expect(payload.annotations).toHaveLength(3);
 
-    // Annotation #1: `<button id="upgrade-cta-btn">` (selected via stepping up to Parent)
     const ann1 = payload.annotations[0]!;
     expect(ann1.id).toBe(1);
     expect(ann1.element.tagName).toBe('button');
@@ -599,7 +587,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
       },
     });
 
-    // Annotation #2: `<section id="pricing-card">` containing PII and selector-masked children
     const ann2 = payload.annotations[1]!;
     expect(ann2.id).toBe(2);
     expect(ann2.element.tagName).toBe('section');
@@ -607,7 +594,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
     expect(ann2.element.textContent).toContain('[MASKED_EMAIL]');
     expect(ann2.element.textContent).toContain('[MASKED_PHONE]');
     expect(ann2.element.textContent).toContain('[MASKED_TOKEN]');
-    // In outerHTMLSnippet, structural tags and classes are preserved while sensitive children are masked
     expect(ann2.element.outerHTMLSnippet).toContain(
       '<section id="pricing-card" class="hero-pricing-card rounded-xl shadow-lg p-6">'
     );
@@ -621,7 +607,6 @@ describe('End-to-End Integration: OverlayApp + SidePanelApp User Journey', () =>
       '<input id="api-password-input" type="password" value="[MASKED]">'
     );
 
-    // Annotation #3: `<span id="customer-badge" class="customer-name">` matched by custom `.customer-name` selector
     const ann3 = payload.annotations[2]!;
     expect(ann3.id).toBe(3);
     expect(ann3.element.selector).toBe('#customer-badge');

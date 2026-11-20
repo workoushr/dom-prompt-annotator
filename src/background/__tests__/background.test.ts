@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  configureSidePanelBehavior,
   ensureContentScriptAndSendMessage,
   handleActionClicked,
   handleRuntimeMessage,
@@ -12,10 +11,16 @@ import {
   resetMemoryStoreForTests,
   savePageState,
 } from '../../utils/storage';
+import {
+  loadUiPreferences,
+  resetUiPreferencesForTests,
+  saveInspectMode,
+} from '../../utils/preferences';
 
 describe('Background Service Worker (src/background/index.ts)', () => {
   beforeEach(() => {
     resetMemoryStoreForTests();
+    resetUiPreferencesForTests();
   });
 
   afterEach(() => {
@@ -25,7 +30,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
 
   it('identifies restricted Chrome and browser internal URLs accurately', () => {
     expect(isRestrictedTabUrl('chrome://extensions')).toBe(true);
-    expect(isRestrictedTabUrl('chrome-extension://abc123/sidepanel.html')).toBe(
+    expect(isRestrictedTabUrl('chrome-extension://abc123/panel.html')).toBe(
       true
     );
     expect(isRestrictedTabUrl('about:blank')).toBe(true);
@@ -37,15 +42,11 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(isRestrictedTabUrl('http://localhost:3000/app')).toBe(false);
   });
 
-  it('configures sidePanel.setPanelBehavior({ openPanelOnActionClick: true }) on install', async () => {
-    const setPanelBehaviorMock = vi.fn().mockResolvedValue(undefined);
+  it('initializes session storage access on install without touching chrome.sidePanel', async () => {
     const setAccessLevelMock = vi.fn().mockResolvedValue(undefined);
     let installedCallback: (() => void) | null = null;
 
     (globalThis as Record<string, unknown>).chrome = {
-      sidePanel: {
-        setPanelBehavior: setPanelBehaviorMock,
-      },
       storage: {
         session: {
           setAccessLevel: setAccessLevelMock,
@@ -69,30 +70,25 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     };
 
     registerBackgroundListeners();
-    expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: true,
-    });
     expect(setAccessLevelMock).toHaveBeenCalledWith({
       accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
     });
 
-    setPanelBehaviorMock.mockClear();
+    setAccessLevelMock.mockClear();
     expect(installedCallback).not.toBeNull();
     installedCallback!();
-    await configureSidePanelBehavior();
-    expect(setPanelBehaviorMock).toHaveBeenCalledWith({
-      openPanelOnActionClick: true,
+    expect(setAccessLevelMock).toHaveBeenCalledWith({
+      accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
     });
+    expect((globalThis as Record<string, unknown>).chrome).not.toHaveProperty(
+      'sidePanel'
+    );
   });
 
-  it('always enables inspectMode and sends SET_INSPECT_MODE on action click without opening the panel manually', async () => {
-    const openSidePanelMock = vi.fn().mockResolvedValue(undefined);
+  it('persists inspectMode and sends SET_INSPECT_MODE on action click without opening any panel', async () => {
     const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
     (globalThis as Record<string, unknown>).chrome = {
-      sidePanel: {
-        open: openSidePanelMock,
-      },
       tabs: {
         sendMessage: sendMessageMock,
       },
@@ -100,18 +96,18 @@ describe('Background Service Worker (src/background/index.ts)', () => {
 
     const tabUrl = 'https://example.com/products?page=2';
     // Explicitly start from inspectMode: false to verify enabling (not toggling)
-    await savePageState(tabUrl, { inspectMode: false });
+    await saveInspectMode(false);
 
     await handleActionClicked({
       id: 42,
       url: tabUrl,
     } as chrome.tabs.Tab);
 
-    expect(openSidePanelMock).not.toHaveBeenCalled();
+    expect((globalThis as Record<string, unknown>).chrome).not.toHaveProperty(
+      'sidePanel'
+    );
 
-    const state = await getPageState(tabUrl);
-    expect(state.inspectMode).toBe(true);
-    expect(state.isVisible).toBe(true);
+    expect((await loadUiPreferences()).inspectMode).toBe(true);
 
     expect(sendMessageMock).toHaveBeenCalledWith(42, {
       type: 'SET_INSPECT_MODE',
@@ -120,7 +116,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     });
   });
 
-  it('keeps inspectMode enabled across repeated action clicks (idempotent, never toggles off)', async () => {
+  it('keeps the inspect preference enabled across repeated action clicks (idempotent, never toggles off)', async () => {
     const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
     (globalThis as Record<string, unknown>).chrome = {
@@ -133,9 +129,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     await handleActionClicked({ id: 7, url: tabUrl } as chrome.tabs.Tab);
     await handleActionClicked({ id: 7, url: tabUrl } as chrome.tabs.Tab);
 
-    const state = await getPageState(tabUrl);
-    expect(state.inspectMode).toBe(true);
-    expect(state.isVisible).toBe(true);
+    expect((await loadUiPreferences()).inspectMode).toBe(true);
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
     for (const call of sendMessageMock.mock.calls) {
       expect(call[1]).toMatchObject({
@@ -146,7 +140,7 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     }
   });
 
-  it('re-opens overlay UI and enables inspectMode when action icon is clicked and UI was closed (isVisible: false)', async () => {
+  it('re-enables inspect mode when the action icon is clicked after the user closed the bar', async () => {
     const sendMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
     (globalThis as Record<string, unknown>).chrome = {
@@ -156,17 +150,15 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     };
 
     const tabUrl = 'https://example.com/closed-page';
-    // Explicitly set isVisible: false (user had closed the overlay)
-    await savePageState(tabUrl, { isVisible: false, inspectMode: false });
+    // Explicitly start disabled (user had closed the overlay).
+    await saveInspectMode(false);
 
     await handleActionClicked({
       id: 99,
       url: tabUrl,
     } as chrome.tabs.Tab);
 
-    const state = await getPageState(tabUrl);
-    expect(state.isVisible).toBe(true);
-    expect(state.inspectMode).toBe(true);
+    expect((await loadUiPreferences()).inspectMode).toBe(true);
 
     expect(sendMessageMock).toHaveBeenCalledWith(99, {
       type: 'SET_INSPECT_MODE',
@@ -287,82 +279,33 @@ describe('Background Service Worker (src/background/index.ts)', () => {
     expect(sendResponseForForward).toHaveBeenCalledWith({ scrolled: true });
   });
 
-  it('clears page annotations when a tab starts loading (refresh or navigation)', async () => {
-    const url = 'https://example.com/refresh';
+  it('does not register a tabs.onUpdated listener that clears page state on subframe loads', async () => {
+    const url = 'https://example.com/subframe-preview';
     await savePageState(url, {
-      inspectMode: false,
-      annotations: [
-        {
-          id: 1,
-          instruction: 'Make the CTA larger',
-          maskText: false,
-          createdAt: '2026-11-07T00:00:00.000Z',
-          element: {
-            tagName: 'button',
-            id: 'cta',
-            className: 'cta',
-            selector: '#cta',
-            xpath: '//*[@id="cta"]',
-            attributes: { id: 'cta' },
-            textContent: 'Buy',
-            outerHTMLSnippet: '<button id="cta">Buy</button>',
-            rect: { x: 0, y: 0, width: 10, height: 10 },
-            computedStyles: {},
-            framework: null,
-          },
-        },
-      ],
+      inspectMode: true,
+      globalInstruction: 'Keep header sticky',
     });
 
-    let updatedCallback:
-      | ((
-          tabId: number,
-          changeInfo: chrome.tabs.TabChangeInfo,
-          tab: chrome.tabs.Tab
-        ) => void)
-      | null = null;
+    const onUpdatedAddListener = vi.fn();
 
     (globalThis as Record<string, unknown>).chrome = {
       tabs: {
         onUpdated: {
-          addListener: vi.fn(
-            (
-              cb: (
-                tabId: number,
-                changeInfo: chrome.tabs.TabChangeInfo,
-                tab: chrome.tabs.Tab
-              ) => void
-            ) => {
-              updatedCallback = cb;
-            }
-          ),
+          addListener: onUpdatedAddListener,
         },
       },
     };
 
     registerBackgroundListeners();
-    expect(updatedCallback).not.toBeNull();
 
-    // A completed load must not wipe annotations.
-    updatedCallback!(
-      1,
-      { status: 'complete' },
-      { id: 1, url } as chrome.tabs.Tab
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect((await getPageState(url)).annotations).toHaveLength(1);
+    // Chrome's tabs.onUpdated fires for subframe (iframe preview) loads without
+    // exposing frameId. Clearing page state there would wipe the parent overlay,
+    // so the background must not register such a listener at all.
+    expect(onUpdatedAddListener).not.toHaveBeenCalled();
 
-    updatedCallback!(1, { status: 'loading', url }, {
-      id: 1,
-      url,
-    } as chrome.tabs.Tab);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const afterReload = await getPageState(url);
-    expect(afterReload.annotations).toEqual([]);
-    expect(afterReload.inspectMode).toBe(true);
+    const state = await getPageState(url);
+    expect(state.globalInstruction).toBe('Keep header sticky');
+    expect(state.inspectMode).toBe(true);
   });
 
   it('grants untrusted contexts access to session storage on ENSURE_STATE_ACCESS', async () => {
