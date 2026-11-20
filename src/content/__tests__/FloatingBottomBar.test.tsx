@@ -114,6 +114,42 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
     expect(onToggleInspectMode).toHaveBeenCalledTimes(1);
   });
 
+  it('renders no rotate control and no dead slot when device emulation is idle', async () => {
+    await renderComponent();
+
+    expect(container.querySelector('[data-testid="dpa-device-rotate-btn"]')).toBeNull();
+    expect(container.querySelector('.dpa-btn-rotate--idle')).toBeNull();
+
+    const wrap = container.querySelector('.dpa-device-selector-wrap') as HTMLElement;
+    expect(wrap).not.toBeNull();
+    expect(wrap.classList.contains('dpa-device-selector-wrap--active')).toBe(false);
+
+    // Idle button occupies the active total width (device + gap + rotate) so the bar does not shift
+    expect(OVERLAY_CSS).toMatch(/\.dpa-btn-device\s*\{[^}]*width:\s*206px;/s);
+    expect(OVERLAY_CSS).toContain('.dpa-device-selector-wrap--active .dpa-btn-device');
+  });
+
+  it('renders the rotate control and active wrap class when device emulation is enabled', async () => {
+    const emulatedConfig: DeviceEmulationConfig = {
+      enabled: true,
+      presetId: 'iphone-se',
+      name: 'iPhone SE',
+      width: 375,
+      height: 667,
+      deviceScaleFactor: 2,
+      mobile: true,
+      touch: true,
+      orientation: 'portrait',
+    };
+
+    await renderComponent({ emulationConfig: emulatedConfig });
+
+    const wrap = container.querySelector('.dpa-device-selector-wrap') as HTMLElement;
+    expect(wrap.classList.contains('dpa-device-selector-wrap--active')).toBe(true);
+    expect(container.querySelector('[data-testid="dpa-device-rotate-btn"]')).not.toBeNull();
+    expect(container.querySelector('.dpa-btn-rotate--idle')).toBeNull();
+  });
+
   it('handles device emulation preset selection, reset, and orientation toggle', async () => {
     const onSetDeviceEmulation = vi.fn();
     const onClearDeviceEmulation = vi.fn();
@@ -211,6 +247,29 @@ describe('FloatingBottomBar Component (Figma UI3 Style)', () => {
       jsonBtn.click();
     });
     expect(onCopyPrompt).toHaveBeenCalledWith('json');
+  });
+
+  it('applies success color to the entire split copy button when isCopied is true', async () => {
+    await renderComponent({ isCopied: true });
+
+    const wrap = container.querySelector('.dpa-copy-btn-wrap') as HTMLElement;
+    expect(wrap).not.toBeNull();
+    expect(wrap.classList.contains('dpa-copy-btn-wrap--success')).toBe(true);
+
+    const copyBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-copy-btn"]'
+    ) as HTMLButtonElement;
+    const formatToggle = container.querySelector(
+      '[data-testid="dpa-copy-format-toggle-btn"]'
+    ) as HTMLButtonElement;
+    expect(copyBtn.textContent).toContain('コピー完了');
+    expect(copyBtn.classList.contains('dpa-btn-copy--success')).toBe(false);
+    expect(formatToggle).not.toBeNull();
+
+    // CSS success selectors must cover both segments of the split button, including hover
+    expect(OVERLAY_CSS).toContain('.dpa-copy-btn-wrap--success .dpa-btn-copy,');
+    expect(OVERLAY_CSS).toContain('.dpa-copy-btn-wrap--success .dpa-btn-copy-format-toggle');
+    expect(OVERLAY_CSS).not.toContain('.dpa-btn-copy--success');
   });
 
   it('minimizes into compact FAB pill and expands back', async () => {

@@ -1,5 +1,6 @@
 import { ExtensionMessage } from '../types/annotation';
-import { clearPageState, getPageState, savePageState } from '../utils/storage';
+import { saveInspectMode } from '../utils/preferences';
+import { clearPageState, getPageState } from '../utils/storage';
 
 const RESTRICTED_URL_PREFIXES = [
   'chrome://',
@@ -45,20 +46,6 @@ export async function ensureSessionStorageAccess(): Promise<void> {
   }
 }
 
-export async function configureSidePanelBehavior(): Promise<void> {
-  try {
-    if (
-      typeof chrome !== 'undefined' &&
-      chrome.sidePanel &&
-      typeof chrome.sidePanel.setPanelBehavior === 'function'
-    ) {
-      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-    }
-  } catch {
-    // Ignore errors outside Chrome extension environment or unsupported browser versions
-  }
-}
-
 export async function ensureContentScriptAndSendMessage(
   tabId: number,
   url: string | undefined,
@@ -99,9 +86,9 @@ export async function handleActionClicked(tab: chrome.tabs.Tab): Promise<void> {
     return;
   }
 
-  // The action always opens the side panel and re-arms inspect mode; it never
-  // toggles OFF so repeated clicks stay idempotent.
-  await savePageState(tabUrl, { isVisible: true, inspectMode: true });
+  // The action always re-arms in-page inspect mode and persists that choice so
+  // navigating to another page keeps the bar available. Never toggles OFF.
+  await saveInspectMode(true);
 
   if (typeof tabId === 'number') {
     await ensureContentScriptAndSendMessage(tabId, tabUrl, {
@@ -194,7 +181,6 @@ export function handleRuntimeMessage(
 
 export function registerBackgroundListeners(): void {
   void ensureSessionStorageAccess();
-  void configureSidePanelBehavior();
 
   if (typeof chrome === 'undefined') {
     return;
@@ -203,7 +189,6 @@ export function registerBackgroundListeners(): void {
   if (chrome.runtime?.onInstalled?.addListener) {
     chrome.runtime.onInstalled.addListener(() => {
       void ensureSessionStorageAccess();
-      void configureSidePanelBehavior();
     });
   }
 

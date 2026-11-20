@@ -70,7 +70,8 @@ describe('storage utility', () => {
     it('returns default page state when no state has been saved yet', async () => {
       const state = await getPageState('https://app.example.com/products?page=2');
       expect(state.urlKey).toBe('https://app.example.com/products');
-      expect(state.inspectMode).toBe(true);
+      expect(state.inspectMode).toBe(false);
+      expect(state.isVisible).toBe(false);
       expect(state.globalInstruction).toBe('');
       expect(state.maskingConfig).toEqual(DEFAULT_MASKING_CONFIG);
       expect(state.annotations).toEqual([]);
@@ -121,7 +122,8 @@ describe('storage utility', () => {
 
       await clearPageState(url);
       const afterClear = await getPageState(url);
-      expect(afterClear.inspectMode).toBe(true);
+      expect(afterClear.inspectMode).toBe(false);
+      expect(afterClear.isVisible).toBe(false);
       expect(afterClear.globalInstruction).toBe('');
       expect(afterClear.annotations).toEqual([]);
     });

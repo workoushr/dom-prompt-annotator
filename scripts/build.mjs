@@ -16,31 +16,9 @@ async function runBuild() {
     fs.rmSync(distDir, { recursive: true, force: true });
   }
 
-  console.log('1/4 Building Side Panel UI...');
-  await build({
-    configFile: false,
-    root: resolve(rootDir, 'src'),
-    publicDir: resolve(rootDir, 'public'),
-    plugins: [react()],
-    base: './',
-    resolve: {
-      alias: {
-        '@': resolve(rootDir, 'src'),
-      },
-    },
-    esbuild: {
-      charset: 'ascii',
-    },
-    build: {
-      outDir: distDir,
-      emptyOutDir: true,
-      rollupOptions: {
-        input: {
-          sidepanel: resolve(rootDir, 'src/sidepanel/index.html'),
-        },
-      },
-    },
-  });
+  console.log('1/4 Copying public assets...');
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.cpSync(resolve(rootDir, 'public'), distDir, { recursive: true });
 
   const scripts = [
     {

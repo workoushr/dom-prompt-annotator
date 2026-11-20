@@ -203,6 +203,21 @@ async function main() {
   let failure = null;
   const failures = [];
   let currentCheck = '(startup)';
+  let extensionWorker = null;
+
+  const getExtensionWorker = async () => {
+    if (extensionWorker) {
+      return extensionWorker;
+    }
+    let worker = context
+      .serviceWorkers()
+      .find((w) => w.url().startsWith('chrome-extension://'));
+    if (!worker) {
+      worker = await context.waitForEvent('serviceworker', { timeout: WAIT });
+    }
+    extensionWorker = worker;
+    return worker;
+  };
 
   const pass = (name) => {
     checks.passed += 1;
@@ -257,6 +272,17 @@ async function main() {
       const url = new URL(worker.url());
       assert(url.protocol === 'chrome-extension:', `Unexpected service worker URL: ${worker.url()}`);
       assert(url.host, `Could not determine the extension id from ${worker.url()}`);
+    });
+
+    await runCheck('packaged manifest has no side panel', async () => {
+      const worker = await getExtensionWorker();
+      const manifest = await worker.evaluate(() => chrome.runtime.getManifest());
+      assert(!('side_panel' in manifest), 'manifest must not declare side_panel.');
+      const permissions = Array.isArray(manifest.permissions) ? manifest.permissions : [];
+      assert(
+        !permissions.includes('sidePanel'),
+        `manifest permissions must not include sidePanel (found: ${permissions.join(', ')}).`
+      );
     });
 
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
@@ -320,16 +346,62 @@ async function main() {
       );
     };
 
+    const setInspectPreference = async (inspectMode) => {
+      const worker = await getExtensionWorker();
+      await worker.evaluate(
+        async (mode) => {
+          await chrome.storage.local.set({
+            dpa_ui_preferences: { inspectMode: mode },
+          });
+        },
+        inspectMode
+      );
+    };
+
+    const readInspectPreference = async () => {
+      const worker = await getExtensionWorker();
+      return worker.evaluate(async () => {
+        const stored = await chrome.storage.local.get('dpa_ui_preferences');
+        return stored.dpa_ui_preferences ?? null;
+      });
+    };
+
     const ensureDeviceMenuOpen = async () => {
       if (await deviceReset.isVisible().catch(() => false)) return;
       await deviceBtn.click();
       await deviceReset.waitFor({ state: 'visible' });
     };
 
-    // 1. Extension loads and renders the bottom bar; REC control is gone.
-    await runCheck('bottom bar is visible', async () => {
+    // 1. No persisted preference: no bar, no padding, and normal page clicks work.
+    await runCheck('initial load is inactive without a persisted preference', async () => {
+      await delay(700);
+      assert((await bar.count()) === 0, 'Expected no bottom bar before the preference is enabled.');
+      const padding = await page.evaluate(() => document.body.style.paddingBottom);
+      assert(padding === '', `Expected no body padding while inactive, got ${JSON.stringify(padding)}.`);
+
+      const clickPrevented = await page.evaluate(() => {
+        const target = document.querySelector('#primary-btn');
+        if (!target) throw new Error('#primary-btn is missing from the fixture.');
+        const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+        target.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      assert(clickPrevented === false, 'Page clicks must not be intercepted while inactive.');
+      await delay(200);
+      assert((await popover.count()) === 0, 'No annotation popover should open while inactive.');
+    });
+
+    await setInspectPreference(true);
+    await page.reload({ waitUntil: 'load' });
+
+    // 2. With the preference enabled the bar mounts on page load.
+    await runCheck('bottom bar is visible when the preference is enabled', async () => {
       await bar.waitFor({ state: 'visible' });
       assert(await bar.isVisible(), 'Bottom bar is present but not visible.');
+      assert(
+        (await readInspectPreference())?.inspectMode === true,
+        'Persisted preference should remain enabled after reload.'
+      );
     });
 
     await runCheck('recording button is removed', async () => {
@@ -404,7 +476,34 @@ async function main() {
       assert(drawerText.includes('0'), `Expected drawer button text to contain "0" after reload, got ${JSON.stringify(drawerText)}.`);
     });
 
-    // 5. In-page device preview iframe, with the bottom bar pinned in place.
+    // 5. Turning inspect off persists false; the bar stays on this page only.
+    await runCheck('inspect off persists and navigation hides the bar', async () => {
+      await page.locator('[data-testid=\"dpa-bottom-bar-select-btn\"]').click();
+      await delay(300);
+      assert(
+        (await readInspectPreference())?.inspectMode === false,
+        'Toggling inspect off should persist inspectMode: false.'
+      );
+      assert(await bar.isVisible(), 'The bar should remain visible on the current page after toggling off.');
+
+      await page.goto(`${fixtureUrl}?next=1`, { waitUntil: 'load' });
+      await delay(700);
+      const barCount = await bar.count();
+      const barVisible = barCount > 0 ? await bar.isVisible() : false;
+      assert(
+        !barVisible,
+        `Expected no bar after navigation while the preference is off (count=${barCount}).`
+      );
+      const padding = await page.evaluate(() => document.body.style.paddingBottom);
+      assert(padding === '', `Expected no body padding after navigation, got ${JSON.stringify(padding)}.`);
+
+      // Re-enable for the remaining scenarios.
+      await setInspectPreference(true);
+      await page.reload({ waitUntil: 'load' });
+      await bar.waitFor({ state: 'visible' });
+    });
+
+    // 6. In-page device preview iframe, with the bottom bar pinned in place.
     await runCheck('device preview opens iframe without moving the bar', async () => {
       const barBefore = await bar.boundingBox();
       assert(barBefore, 'Could not measure the bottom bar before opening device preview.');
@@ -437,6 +536,9 @@ async function main() {
       const iframeCount = await deviceIframe.count();
       assert(iframeCount === 0, `Expected reset to remove the preview iframe, found ${iframeCount}.`);
 
+      // The idle device button has a 0.12s width transition; let it settle
+      // before measuring the bar so the assertion reflects the final layout.
+      await delay(300);
       const barReset = await bar.boundingBox();
       assertBoxClose(barReset, barBefore, 'bottom bar after device reset');
     });

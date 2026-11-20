@@ -57,8 +57,8 @@ export function createDefaultPageState(url: string): PageAnnotationState {
   const urlKey = normalizeUrlKey(url);
   return {
     urlKey,
-    inspectMode: true,
-    isVisible: true,
+    inspectMode: false,
+    isVisible: false,
     globalInstruction: '',
     maskingConfig: {
       ...DEFAULT_MASKING_CONFIG,

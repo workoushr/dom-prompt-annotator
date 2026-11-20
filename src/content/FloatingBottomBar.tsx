@@ -215,7 +215,12 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
       <div className="dpa-divider" />
 
       {/* 2. [📱 デバイス切替] Dropdown & Rotate Button */}
-      <div className="dpa-device-selector-wrap" ref={deviceMenuRef}>
+      <div
+        className={`dpa-device-selector-wrap ${
+          emulationConfig.enabled ? 'dpa-device-selector-wrap--active' : ''
+        }`}
+        ref={deviceMenuRef}
+      >
         <button
           type="button"
           className={`dpa-btn dpa-btn-device ${
@@ -248,22 +253,20 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
           />
         </button>
 
-        {/* Orientation Toggle Button (↻) — always laid out to keep bar width stable */}
-        <button
-          type="button"
-          className={`dpa-btn dpa-btn-rotate ${
-            emulationConfig.enabled ? '' : 'dpa-btn-rotate--idle'
-          }`}
-          data-testid="dpa-device-rotate-btn"
-          onClick={handleToggleOrientation}
-          disabled={!emulationConfig.enabled}
-          aria-hidden={!emulationConfig.enabled}
-          title={`画面回転 (${
-            emulationConfig.orientation === 'landscape' ? '横向き' : '縦向き'
-          })`}
-        >
-          <RotateCw className="dpa-icon-xs" />
-        </button>
+        {/* Orientation Toggle Button (↻) — only when emulating; idle device button keeps the same total width */}
+        {emulationConfig.enabled && (
+          <button
+            type="button"
+            className="dpa-btn dpa-btn-rotate"
+            data-testid="dpa-device-rotate-btn"
+            onClick={handleToggleOrientation}
+            title={`画面回転 (${
+              emulationConfig.orientation === 'landscape' ? '横向き' : '縦向き'
+            })`}
+          >
+            <RotateCw className="dpa-icon-xs" />
+          </button>
+        )}
 
         {/* Device Presets Flyout Menu */}
         {deviceMenuOpen && (
@@ -354,12 +357,15 @@ export const FloatingBottomBar: React.FC<FloatingBottomBarProps> = ({
       <div className="dpa-divider" />
 
       {/* 5. [📋 AIプロンプトコピー] Button */}
-      <div className="dpa-copy-btn-wrap" ref={copyMenuRef}>
+      <div
+        className={`dpa-copy-btn-wrap ${
+          isCopied ? 'dpa-copy-btn-wrap--success' : ''
+        }`}
+        ref={copyMenuRef}
+      >
         <button
           type="button"
-          className={`dpa-btn dpa-btn-copy ${
-            isCopied ? 'dpa-btn-copy--success' : ''
-          }`}
+          className="dpa-btn dpa-btn-copy"
           data-testid="dpa-bottom-bar-copy-btn"
           onClick={() => void onCopyPrompt('markdown')}
           title="LLM向けMarkdownプロンプトをクリップボードにコピー"

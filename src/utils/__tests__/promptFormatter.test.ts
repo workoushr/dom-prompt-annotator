@@ -69,7 +69,7 @@ function createSamplePageState(
   };
 }
 
-describe('Prompt & JSON Formatter (src/sidepanel/promptFormatter.ts)', () => {
+describe('Prompt & JSON Formatter (src/utils/promptFormatter.ts)', () => {
   it('builds ExportPayload and strictly applies PII masking to annotations, page title, and globalInstruction when autoMaskPII is enabled', () => {
     const state = createSamplePageState();
     const payload = buildExportPayload(state, {

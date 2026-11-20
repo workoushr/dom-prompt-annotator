@@ -15,6 +15,11 @@ import {
   savePageState,
 } from '../../utils/storage';
 import { SHADOW_HOST_ID } from '../../utils/masker';
+import {
+  loadUiPreferences,
+  resetUiPreferencesForTests,
+  saveInspectMode,
+} from '../../utils/preferences';
 import { AnnotationItem } from '../../types/annotation';
 
 // Enable React 18 act environment
@@ -29,6 +34,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
 
   beforeEach(async () => {
     resetMemoryStoreForTests();
+    resetUiPreferencesForTests();
     delete (globalThis as Record<string, unknown>).chrome;
     storageChangeListener = null;
     (globalThis as Record<string, unknown>).chrome = {
@@ -132,6 +138,91 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     };
   }
 
+  it('renders no bar, no padding, and no click interception when inspectMode is not persisted', async () => {
+    const pageButton = document.createElement('button');
+    pageButton.id = 'plain-button';
+    pageButton.textContent = 'Plain';
+    document.body.appendChild(pageButton);
+
+    await renderOverlay();
+
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dpa-overlay-root"]')).toBeNull();
+    expect(document.body.style.paddingBottom).toBe('');
+
+    let defaultPrevented = false;
+    await act(async () => {
+      const clickEvent = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+      });
+      pageButton.dispatchEvent(clickEvent);
+      defaultPrevented = clickEvent.defaultPrevented;
+    });
+
+    expect(defaultPrevented).toBe(false);
+    expect(container.querySelector('[data-testid="dpa-popover"]')).toBeNull();
+  });
+
+  it('renders the bar with padding and inspect mode when the preference is true', async () => {
+    await saveInspectMode(true);
+    await renderOverlay();
+
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="dpa-mode-pill"]')?.textContent
+    ).toContain('選択中');
+    expect(document.body.style.paddingBottom).toBe('72px');
+  });
+
+  it('persists inspect off while keeping the bar visible on the current page', async () => {
+    await saveInspectMode(true);
+    await renderOverlay();
+
+    const selectBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-select-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      selectBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect((await loadUiPreferences()).inspectMode).toBe(false);
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
+    expect((await getPageState(window.location.href)).inspectMode).toBe(false);
+  });
+
+  it('does not show the bar after a navigation when the preference is false', async () => {
+    await saveInspectMode(true);
+    await renderOverlay();
+
+    const selectBtn = container.querySelector(
+      '[data-testid="dpa-bottom-bar-select-btn"]'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      selectBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect((await loadUiPreferences()).inspectMode).toBe(false);
+
+    // Simulate a navigation: session page state is cleared and the content
+    // script mounts again on the next document.
+    if (root) {
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+    }
+    resetMemoryStoreForTests();
+
+    await renderOverlay();
+
+    expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).toBeNull();
+    expect(document.body.style.paddingBottom).toBe('');
+  });
+
   it('intercepts clicks on page elements in inspectMode and opens the In-Page Annotation Popover', async () => {
     const pageSection = document.createElement('section');
     pageSection.id = 'hero-section';
@@ -143,7 +234,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(pageSection);
 
     await renderOverlay();
-    await seedMountedState({ inspectMode: true });
+    await seedMountedState({ inspectMode: true, isVisible: true });
 
     const ctaLink = document.getElementById('cta-link') as HTMLAnchorElement;
     let defaultPrevented = false;
@@ -193,7 +284,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(card);
 
     await renderOverlay();
-    await seedMountedState({ inspectMode: true });
+    await seedMountedState({ inspectMode: true, isVisible: true });
 
     const buyBtn = document.getElementById('buy-btn')!;
 
@@ -266,7 +357,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     document.body.appendChild(profileHeader);
 
     await renderOverlay();
-    await seedMountedState({ inspectMode: true });
+    await seedMountedState({ inspectMode: true, isVisible: true });
 
     // Click element to open Popover
     await act(async () => {
@@ -360,6 +451,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     await renderOverlay();
     await seedMountedState({
       inspectMode: true,
+      isVisible: true,
       maskingConfig: {
         visualMaskEnabled: true,
         maskAllText: true,
@@ -448,6 +540,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   });
 
   it('closes overlay UI completely via close button on bottom bar', async () => {
+    await saveInspectMode(true);
     await renderOverlay();
 
     const bottomBar = container.querySelector('[data-testid="dpa-bottom-bar"]');
@@ -475,7 +568,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
 
   it('closes overlay UI via Escape key (two Esc presses when inspectMode is active)', async () => {
     await renderOverlay();
-    await seedMountedState({ inspectMode: true });
+    await seedMountedState({ inspectMode: true, isVisible: true });
 
     expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).not.toBeNull();
 
@@ -505,7 +598,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     expect(container.querySelector('[data-testid="dpa-bottom-bar"]')).toBeNull();
   });
 
-  it('re-opens closed overlay UI via SET_INSPECT_MODE or TOGGLE_OVERLAY message or Alt+S shortcut', async () => {
+  it('re-opens closed overlay UI via SET_INSPECT_MODE or Alt+S shortcut', async () => {
     let messageListener: ((msg: any, sender: any, sendResponse: any) => boolean | void) | null = null;
     (globalThis as Record<string, unknown>).chrome = {
       runtime: {
@@ -519,6 +612,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     };
 
     // Start with the UI open, then close it so reopening paths are exercised.
+    await saveInspectMode(true);
     await renderOverlay();
 
     const initialCloseBtn = container.querySelector(
@@ -622,6 +716,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
   describe('Dynamic document.body paddingBottom management (Issue 5)', () => {
     it('sets paddingBottom to 72px when bottom bar is active and restores original on close, minimize, and unmount', async () => {
       document.body.style.paddingBottom = '';
+      await saveInspectMode(true);
       await renderOverlay();
 
       // Bottom bar is visible and expanded
@@ -669,6 +764,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
 
     it('safely saves and restores pre-existing inline body padding', async () => {
       document.body.style.paddingBottom = '30px';
+      await saveInspectMode(true);
       await renderOverlay();
 
       expect(document.body.style.paddingBottom).toBe('72px');
@@ -691,6 +787,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
         runtime: { sendMessage },
       };
 
+      await saveInspectMode(true);
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
@@ -761,6 +858,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     });
 
     it('rotates the selected device locally and shows the rotation toast', async () => {
+      await saveInspectMode(true);
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
@@ -825,6 +923,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     });
 
     it('shows desktop reset toast and clears local emulation state', async () => {
+      await saveInspectMode(true);
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
@@ -875,6 +974,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
     });
 
     it('shows a non-interactive hint when the preview document is inaccessible', async () => {
+      await saveInspectMode(true);
       await renderOverlay();
 
       const deviceBtn = container.querySelector(
@@ -930,6 +1030,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       target.textContent = 'Copy target';
       document.body.appendChild(target);
 
+      await saveInspectMode(true);
       await renderOverlay();
       await seedMountedState({
         annotations: [buildAnnotation(1, '#copy-target', '//*[@id="copy-target"]')],
@@ -983,6 +1084,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       target.textContent = 'Keep target';
       document.body.appendChild(target);
 
+      await saveInspectMode(true);
       await renderOverlay();
       await seedMountedState({
         annotations: [buildAnnotation(1, '#keep-target', '//*[@id="keep-target"]')],
@@ -1021,6 +1123,7 @@ describe('Content Script & Shadow DOM Overlay UI (OverlayApp.tsx)', () => {
       target.textContent = 'JSON target';
       document.body.appendChild(target);
 
+      await saveInspectMode(true);
       await renderOverlay();
       await seedMountedState({
         annotations: [buildAnnotation(1, '#json-target', '//*[@id="json-target"]')],
